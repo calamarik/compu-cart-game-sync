@@ -1,0 +1,127 @@
+COMPU-CART 1.0 — WINDOWS PORTABLE x64
+===================================
+
+1. INSTALLATION ET LANCEMENT
+---------------------------
+Configuration : Windows 10 ou Windows 11, processeur Intel/AMD 64 bits.
+Cette archive n'est pas une version Windows 32 bits ou ARM64 native.
+
+1) Cliquez droit sur le ZIP, puis « Extraire tout ».
+2) Placez le dossier extrait dans un emplacement accessible en écriture,
+   par exemple Documents\Compu-Cart. Ne lancez pas l'application dans le ZIP.
+3) Ouvrez le dossier Compu-Cart-win32-x64 et double-cliquez sur Compu-Cart.exe.
+4) Gardez tous les fichiers et sous-dossiers à côté de l'exécutable.
+
+Pas besoin de Node.js, d'Electron, d'un compte, d'Internet ou des droits
+administrateur. Les composants nécessaires et les polices sont inclus.
+Vous pouvez créer un raccourci vers Compu-Cart.exe sur le Bureau.
+L'application fonctionne tant que sa fenêtre est ouverte ; elle ne s'installe
+pas en service Windows et ne démarre pas automatiquement avec Windows.
+
+L'exécutable n'est pas signé : Windows peut afficher un avertissement de
+réputation. Vérifiez l'origine et l'empreinte du ZIP avant de décider de
+l'exécuter. Ne désactivez pas l'antivirus. Une politique d'entreprise peut
+interdire les programmes non signés.
+
+2. PREPARER UNE CARTOUCHE
+-------------------------
+Utilisez uniquement un support et un jeu de confiance dont vous avez les droits.
+Le jeu doit pouvoir être lancé directement : ses propres dépendances,
+licences, pilotes ou installateurs ne sont pas inclus dans ce ZIP.
+Aucun jeu n'est fourni. Le dossier exemple-cartouche contient seulement un
+modèle de manifeste, qui ne doit pas être utilisé sans vos vraies empreintes.
+
+Exemple de structure de votre clé USB (lettre E: donnée à titre d'exemple) :
+  E:\compucart.json
+  E:\bin\MonJeu.exe
+  E:\saves\
+  E:\intro.png       (facultatif)
+  E:\jingle.mp3      (facultatif)
+
+Après avoir copié un jeu portable sur la clé, ouvrez Windows PowerShell et
+lancez l'outil fourni depuis le dossier de l'application :
+
+  powershell.exe -NoProfile -File ".\outils\Preparer-Cartouche.ps1" -Racine "E:\" -Id "mon-jeu" -Titre "Mon jeu" -Executable "bin\MonJeu.exe"
+
+Remplacez E:, l'identifiant, le titre et le chemin par vos valeurs réelles.
+L'outil crée compucart.json, l'empreinte de l'exécutable et le dossier saves.
+Si votre politique PowerShell bloque les scripts, utilisez la méthode
+manuelle ci-dessous plutôt que de modifier votre politique de sécurité.
+
+Méthode manuelle : calculez l'empreinte avec :
+  Get-FileHash "E:\bin\MonJeu.exe" -Algorithm SHA256
+Copiez exemple-cartouche\compucart.modele.json vers E:\compucart.json,
+remplacez tous les champs et le marqueur d'empreinte par votre valeur SHA-256
+de 64 caractères. Enregistrez le JSON en UTF-8 sans BOM. Chaque chemin
+checksums doit correspondre exactement au chemin de fichier utilisé.
+Pour vérifier aussi les données du jeu, ajoutez leurs chemins et empreintes
+à checksums. La vérification ne porte que sur les fichiers listés.
+Après une mise à jour du jeu, recalculez les empreintes ; conservez une copie
+de votre ancien manifeste avant de le remplacer.
+
+Pour une intro personnalisée, remplacez intro:{} dans le manifeste par :
+  "intro": { "image": "intro.png", "audio": "jingle.mp3" }
+Utilisez une image PNG et un son MP3. Sans ces fichiers, l'intro Compu-Cart
+et son jingle sont joués. Le jeu est lancé automatiquement après 3,2 secondes.
+Les chemins sont relatifs à la clé ; les liens et chemins sortant du support
+ne sont pas autorisés. Les SHA-256 détectent les modifications, mais ne
+prouvent pas qu'un jeu est sûr : ils ne remplacent pas un antivirus.
+
+3. BRANCHEMENT ET SAUVEGARDES
+-----------------------------
+Compu-Cart surveille les lecteurs D: à Z: toutes les 1,5 seconde.
+Une clé déjà branchée est détectée à l'ouverture. Un seul support est traité
+à la fois ; retirez et rebranchez un second support quand le premier est fini.
+La présence de compucart.json à la racine déclenche vérification, synchronisation,
+intro, puis lancement. Une empreinte incorrecte bloque le jeu.
+
+Le dossier local est créé automatiquement ici :
+  %APPDATA%\CompuCart\saves\<id>
+Pour l'exemple « mon-jeu », configurez le jeu pour écrire et lire ses
+sauvegardes dans %APPDATA%\CompuCart\saves\mon-jeu.
+Compu-Cart ne redirige pas automatiquement les sauvegardes d'un jeu :
+les paramètres ou options de ce jeu doivent utiliser ce dossier.
+Si le jeu impose un autre emplacement, cette version nécessite une
+configuration adaptée du jeu ; ne supposez pas que ses sauvegardes seront
+capturées. Le dossier exact apparaît après synchronisation dans la fenêtre.
+
+Au branchement puis à la fermeture du jeu, la version la plus récente de
+chaque fichier gagne, avec une tolérance de 2 secondes. Un fichier manquant
+est copié ; les suppressions ne sont pas répliquées. Il n'y a pas de fusion
+de deux parties : conservez une sauvegarde indépendante avant la première
+utilisation et évitez de modifier simultanément les deux versions.
+Chaque copie passe par un fichier temporaire vérifié SHA-256. L'ancienne
+version est conservée en .bak ; les .bak et .cctmp ne sont pas synchronisés.
+Le jeu doit rester lié au processus lancé : les lanceurs qui quittent avant
+le vrai jeu ne permettent pas de détecter correctement sa fin.
+
+Ne retirez pas la clé pendant le jeu ou la synchronisation. Attendez l'état
+« ready » et le message de synchronisation retour avant l'éjection Windows.
+Si la clé est retirée trop tôt, le retour sur la clé est reporté ; conservez
+les sauvegardes locales et rebranchez-la lorsque le jeu est terminé.
+
+4. DEPANNAGE ET DESINSTALLATION
+-------------------------------
+« Aucune cartouche » : vérifiez la lettre D: à Z:, le nom compucart.json,
+et que le fichier se trouve bien à la racine du lecteur.
+« Intégrité compromise » : restaurez le bon fichier ou recalculez ses
+empreintes uniquement si la modification est voulue et provient d'une
+source fiable. N'utilisez pas un manifeste téléchargé sans vérification.
+Erreur de sauvegarde : vérifiez les droits d'écriture, l'espace disque et
+que le support n'est pas protégé en écriture.
+Jeu absent ou ne démarrant pas : vérifiez executable, les dépendances du
+jeu et les messages du journal. Le journal affiché n'est pas enregistré
+automatiquement dans un fichier.
+
+Pour désinstaller : fermez Compu-Cart puis supprimez son dossier et les
+raccourcis. Les sauvegardes restent dans %APPDATA%\CompuCart ; supprimez-les
+seulement après avoir conservé une copie si vous voulez les effacer.
+
+5. VALIDATION DE CETTE LIVRAISON
+--------------------------------
+L'archive contient un véritable exécutable Windows x64 et son runtime.
+La fenêtre hors ligne, l'intro et les chemins normal/erreur ont été vérifiés
+dans Chromium ; les tests d'intégrité et de copie bidirectionnelle ont réussi.
+Le programme Windows, le branchement USB et le lancement d'un vrai jeu n'ont
+pas pu être exécutés sur un ordinateur Windows dans cet environnement Linux.
+Ce ZIP est portable, pas un installateur MSI/EXE signé.

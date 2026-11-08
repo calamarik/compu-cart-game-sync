@@ -1,0 +1,11 @@
+{
+  "id": "mon-jeu",
+  "title": "Mon jeu",
+  "executable": "bin/MonJeu.exe",
+  "args": [],
+  "saveDir": "saves",
+  "intro": {},
+  "checksums": {
+    "bin/MonJeu.exe": "REMPLACER_PAR_LE_SHA256_REEL_DE_64_CARACTERES"
+  }
+}
