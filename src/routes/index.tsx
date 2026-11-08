@@ -41,7 +41,7 @@ function jingle() {
   });
 }
 
-function Index() {
+export function Index() {
   const [cart, setCart] = useState<Cart>({ state: "empty" });
   const [logs, setLogs] = useState<Log[]>([]);
   const [integrity, setIntegrity] = useState<Integrity | null>(null);

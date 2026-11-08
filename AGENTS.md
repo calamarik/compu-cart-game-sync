@@ -28,3 +28,6 @@ use the editor.
   own key and store it in Secrets.
 - **Secrets.** Lovable manages them. Do not put secret values in the repo.
 <!-- LOVABLE:END -->
+
+- Keep the desktop renderer as an offline TanStack Router entry reusing the web console, with relative bundled assets and local fonts; the portable Windows app must not depend on a hosted preview or an SSR server.
+- Package Windows releases from a clean staging folder with @electron/packager; include only the desktop runtime, renderer, cartridge tools, and installation guide.

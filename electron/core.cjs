@@ -36,8 +36,30 @@ class HotplugWatcher extends EventEmitter {
 
 async function readManifest(root) {
   const m = JSON.parse(await fsp.readFile(path.join(root, MANIFEST), "utf8"));
-  if (!m.id || !m.title || !m.executable) throw new Error("Manifeste invalide (id/title/executable requis)");
-  return { saveDir: "saves", checksums: {}, intro: {}, ...m };
+  if (!/^[a-zA-Z0-9_-]+$/.test(m.id || "") || typeof m.title !== "string" || !m.title || typeof m.executable !== "string") throw new Error("Manifeste invalide (id/title/executable requis)");
+  const manifest = { saveDir: "saves", intro: {}, ...m };
+  if (!manifest.checksums || typeof manifest.checksums !== "object" || Array.isArray(manifest.checksums)) throw new Error("Empreintes SHA-256 requises");
+  if (!manifest.checksums[manifest.executable]) throw new Error("Empreinte SHA-256 de l'exécutable requise");
+  if (manifest.args !== undefined && (!Array.isArray(manifest.args) || manifest.args.some((arg) => typeof arg !== "string"))) throw new Error("Arguments invalides");
+  for (const rel of [manifest.executable, manifest.saveDir, manifest.intro?.image, manifest.intro?.audio, ...Object.keys(manifest.checksums)]) {
+    if (rel !== undefined) await validatePath(root, rel);
+  }
+  for (const hash of Object.values(manifest.checksums)) if (!/^[a-f0-9]{64}$/i.test(hash)) throw new Error("Empreinte SHA-256 invalide");
+  return manifest;
+}
+
+async function validatePath(root, rel) {
+  if (typeof rel !== "string" || !rel || rel.includes(":") || path.win32.isAbsolute(rel) || rel.split(/[\\/]/).some((part) => part === "..")) throw new Error("Chemin de cartouche invalide");
+  const target = path.resolve(root, rel);
+  const relative = path.relative(path.resolve(root), target);
+  if (relative.startsWith("..") || path.isAbsolute(relative)) throw new Error("Chemin hors cartouche");
+  let cursor = path.resolve(root);
+  for (const part of relative.split(path.sep)) {
+    cursor = path.join(cursor, part);
+    try { if ((await fsp.lstat(cursor)).isSymbolicLink()) throw new Error("Liens de fichiers interdits sur la cartouche"); }
+    catch (error) { if (error.code !== "ENOENT") throw error; }
+  }
+  return target;
 }
 
 function sha256(file) {
@@ -63,6 +85,8 @@ async function listFiles(dir, base = dir) {
   const out = {};
   if (!fs.existsSync(dir)) return out;
   for (const e of await fsp.readdir(dir, { withFileTypes: true })) {
+    if (e.isSymbolicLink()) throw new Error("Liens de fichiers interdits dans les sauvegardes");
+    if (e.name.endsWith(".bak") || e.name.endsWith(".cctmp")) continue;
     const full = path.join(dir, e.name);
     if (e.isDirectory()) Object.assign(out, await listFiles(full, base));
     else out[path.relative(base, full)] = (await fsp.stat(full)).mtimeMs;
