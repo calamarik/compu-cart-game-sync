@@ -16,12 +16,19 @@ export const Route = createFileRoute("/")({
   component: Index,
 });
 
-type State = "empty" | "verifying" | "corrupt" | "syncing" | "intro" | "ready" | "running" | "error";
+type State = "empty" | "verifying" | "corrupt" | "syncing" | "intro" | "ready" | "running" | "error" | "ejecting" | "ejected";
 type Manifest = { id: string; title: string; executable: string };
 type Cart = { state: State; root?: string; manifest?: Manifest; intro?: { image: string | null; audio: string | null } };
 type Log = { level: "info" | "ok" | "warn" | "error"; msg: string; at: number };
 type Integrity = { ok: boolean; results: { file: string; ok: boolean }[] };
-type Bridge = { on: (ch: string, cb: (d: any) => void) => void; launch: (root: string) => Promise<void> };
+type Bridge = {
+  on: (ch: string, cb: (d: any) => void) => void;
+  launch: (root: string) => Promise<void>;
+  eject?: () => Promise<void>;
+  hide?: () => Promise<void>;
+  quit?: () => Promise<void>;
+};
+const EJECTABLE: State[] = ["ready", "corrupt", "error"];
 
 const STEPS: { key: State[]; label: string }[] = [
   { key: ["verifying"], label: "Intégrité" },
@@ -58,7 +65,7 @@ export function Index() {
     b.on("cart", setCart);
     b.on("integrity", setIntegrity);
     b.on("sync", setSync);
-    log("ok", "Pont matériel connecté — surveillance des lecteurs D: à Z:");
+    log("ok", "Pont matériel connecté — en attente d'un branchement (détection par événements Windows)");
   }, []);
 
   // Intro sequence then launch.
@@ -67,7 +74,14 @@ export function Index() {
     if (cart.intro?.audio) new Audio(cart.intro.audio).play().catch(jingle); else jingle();
     const t = window.setTimeout(() => {
       if (bridge && cart.root) bridge.launch(cart.root);
-      else { setCart((c) => ({ ...c, state: "running" })); log("info", `Lancement simulé de ${cart.manifest?.title}`); }
+      else {
+        setCart((c) => ({ ...c, state: "running" }));
+        log("info", `Lancement simulé de ${cart.manifest?.title}`);
+        timers.current.push(window.setTimeout(() => {
+          log("info", "Jeu terminé (simulation) — synchronisation retour");
+          setCart((c) => ({ ...c, state: "ready" }));
+        }, 3500));
+      }
     }, 3200);
     return () => clearTimeout(t);
   }, [cart.state]);
@@ -93,7 +107,20 @@ export function Index() {
       });
     });
   };
-  const eject = () => { timers.current.forEach(clearTimeout); setCart({ state: "empty" }); setIntegrity(null); setSync(null); log("warn", "Cartouche retirée"); };
+  const eject = () => {
+    if (bridge?.eject) { bridge.eject(); return; }
+    timers.current.forEach(clearTimeout);
+    const root = cart.root;
+    setCart({ state: "ejecting", root });
+    log("info", `Éjection de ${root} : écriture des données en attente…`);
+    timers.current.push(window.setTimeout(() => {
+      setIntegrity(null); setSync(null);
+      setCart({ state: "ejected", root });
+      log("ok", "Cartouche éjectée : vous pouvez la retirer en toute sécurité");
+      timers.current.push(window.setTimeout(() => setCart({ state: "empty" }), 6000));
+    }, 1200));
+  };
+  const canEject = !!cart.root && EJECTABLE.includes(cart.state);
 
   const activeIdx = STEPS.findIndex((s) => s.key.includes(cart.state));
   const levelCls = { info: "text-muted-foreground", ok: "text-success", warn: "text-warn", error: "text-destructive" };
@@ -105,14 +132,24 @@ export function Index() {
           <h1 className="font-display text-2xl text-primary glow md:text-3xl">COMPU-CART</h1>
           <p className="mt-2 text-sm text-muted-foreground">{bridge ? "Système actif" : "Mode démo"} · cartouches externes</p>
         </div>
-        {!bridge && (
-          <div className="flex gap-2">
+        <div className="flex flex-wrap gap-2">
+          {!bridge && (<>
             <button onClick={() => simulate()} className="rounded-sm bg-primary px-4 py-2 text-sm font-bold text-primary-foreground hover:opacity-90">Insérer cartouche</button>
             <button onClick={() => simulate(true)} className="rounded-sm border border-destructive px-4 py-2 text-sm text-destructive hover:bg-destructive/10">Cartouche corrompue</button>
-            <button onClick={eject} className="rounded-sm border px-4 py-2 text-sm hover:bg-secondary">Éjecter</button>
-          </div>
-        )}
+          </>)}
+          <button onClick={eject} disabled={!canEject} title={canEject ? "Écrit les données puis déconnecte la cartouche" : "Disponible quand aucun jeu ni synchronisation n'est en cours"} className="rounded-sm border border-primary px-4 py-2 text-sm text-primary hover:bg-primary/10 disabled:cursor-not-allowed disabled:border-border disabled:text-muted-foreground disabled:hover:bg-transparent">⏏ Éjecter</button>
+          {bridge?.hide && <button onClick={() => bridge.hide?.()} className="rounded-sm border px-4 py-2 text-sm hover:bg-secondary">Réduire</button>}
+          {bridge?.quit && <button onClick={() => bridge.quit?.()} className="rounded-sm border px-4 py-2 text-sm text-muted-foreground hover:bg-secondary">Quitter</button>}
+        </div>
       </header>
+
+      {(cart.state === "ejecting" || cart.state === "ejected") && (
+        <div role="status" className={`mb-6 rounded-sm border-2 p-4 text-sm ${cart.state === "ejected" ? "border-success text-success" : "border-primary text-primary"}`}>
+          {cart.state === "ejecting"
+            ? `Éjection de ${cart.root ?? "la cartouche"} : écriture des données, ne retirez rien…`
+            : `Vous pouvez retirer la cartouche ${cart.root ?? ""} en toute sécurité.`}
+        </div>
+      )}
 
       <div className="grid gap-6 lg:grid-cols-3">
         <section className="panel p-6 lg:col-span-2">
@@ -120,7 +157,7 @@ export function Index() {
             <div className="grid h-20 w-16 place-items-center rounded-sm bg-secondary font-display text-xs text-primary">{cart.state === "empty" ? "—" : "CC"}</div>
             <div>
               <p className="font-display text-sm">{cart.manifest?.title ?? "INSÉREZ UNE CARTOUCHE"}</p>
-              <p className="mt-2 text-xs text-muted-foreground">{cart.root ? `${cart.root} · ${cart.manifest?.executable}` : "En attente d'un événement de branchement…"}</p>
+              <p className="mt-2 text-xs text-muted-foreground">{cart.root ? [cart.root, cart.manifest?.executable].filter(Boolean).join(" · ") : "En attente d'un branchement…"}</p>
             </div>
             <span className="ml-auto rounded-sm bg-secondary px-3 py-1 text-xs uppercase tracking-widest text-primary">{cart.state}</span>
           </div>
@@ -171,6 +208,15 @@ export function Index() {
               <p className="mt-6 font-display text-sm text-foreground">{cart.manifest?.title}</p>
             </div>
           )}
+        </div>
+      )}
+
+      {cart.state === "running" && (
+        <div className="fixed inset-0 z-40 grid place-items-center bg-background" aria-live="polite">
+          <div className="text-center">
+            <p className="font-display text-sm text-primary/60">{cart.manifest?.title ?? "JEU"} EN COURS</p>
+            <p className="mt-4 text-xs text-muted-foreground">Compu-Cart reprendra à la fermeture du jeu.</p>
+          </div>
         </div>
       )}
     </main>

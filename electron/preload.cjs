@@ -7,4 +7,7 @@ contextBridge.exposeInMainWorld("compucart", {
     return () => ipcRenderer.removeListener(`cc:${ch}`, listener);
   },
   launch: (root) => ipcRenderer.invoke("cc:launch", root),
+  eject: () => ipcRenderer.invoke("cc:eject"),
+  hide: () => ipcRenderer.invoke("cc:hide"),
+  quit: () => ipcRenderer.invoke("cc:quit"),
 });
