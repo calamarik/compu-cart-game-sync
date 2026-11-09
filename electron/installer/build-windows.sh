@@ -10,9 +10,9 @@ OUT="${OUT:-$WORK/out}"
 
 mkdir -p "$WORK"
 cd "$WORK"
-if [ ! -d node_modules/@electron/packager ] || [ ! -d node_modules/resedit ]; then
+if [ ! -d node_modules/@electron/packager ]; then
   [ -f package.json ] || echo '{"name":"ccbuild","private":true}' > package.json
-  npm install --no-audit --no-fund @electron/packager@18 electron@33 resedit@2 pe-library
+  npm install --no-audit --no-fund @electron/packager@18 electron@33
 fi
 ELECTRON_VERSION="$(node -p "require('./node_modules/electron/package.json').version")"
 
@@ -24,13 +24,13 @@ cat > "$STAGE/app/package.json" <<JSON
 { "name": "compu-cart", "productName": "Compu-Cart", "version": "$VERSION", "description": "Compu-Cart", "author": "Compu-Cart", "main": "electron/main.cjs" }
 JSON
 
-# Explicit metadata: without it packager searches parent folders for package.json "author" and stalls.
+# Packager 18 stamps the exe icon/version with resedit (pure JS, no Wine needed).
 npx @electron/packager "$STAGE/app" Compu-Cart --platform=win32 --arch=x64 \
   --electron-version="$ELECTRON_VERSION" --out="$STAGE/pkg" --overwrite --app-version="$VERSION" \
+  --icon="$PROJECT/electron/assets/icon.ico" \
   --win32metadata.CompanyName="Compu-Cart" --win32metadata.ProductName="Compu-Cart" \
   --win32metadata.FileDescription="Compu-Cart"
 APPDIR="$STAGE/pkg/Compu-Cart-win32-x64"
-node "$PROJECT/electron/installer/stamp-exe.mjs" "$APPDIR/Compu-Cart.exe" "$PROJECT/electron/assets/icon.ico" "$VERSION" "$WORK/node_modules/resedit"
 
 # Cartridge tools and guide next to the program.
 mkdir -p "$APPDIR/outils" "$APPDIR/exemple-cartouche"
