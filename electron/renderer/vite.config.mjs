@@ -14,5 +14,5 @@ export default defineConfig({
   base: "./",
   plugins: [react(), tailwindcss()],
   resolve: { alias: { "@": path.join(root, "src") } },
-  build: { outDir: path.join(root, "electron-release/renderer"), emptyOutDir: true, assetsInlineLimit: 0 },
+  build: { outDir: process.env.COMPUCART_RENDERER_OUT || "/tmp/compucart-renderer", emptyOutDir: true, assetsInlineLimit: 0 },
 });
