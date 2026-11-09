@@ -21,11 +21,14 @@ rm -rf "$STAGE" && mkdir -p "$STAGE/app/electron" "$OUT"
 cp "$PROJECT"/electron/main.cjs "$PROJECT"/electron/core.cjs "$PROJECT"/electron/preload.cjs "$PROJECT"/electron/eject.ps1 "$STAGE/app/electron/"
 cp -r "$PROJECT/electron/assets" "$STAGE/app/electron/"
 cat > "$STAGE/app/package.json" <<JSON
-{ "name": "compu-cart", "productName": "Compu-Cart", "version": "$VERSION", "description": "Compu-Cart", "main": "electron/main.cjs" }
+{ "name": "compu-cart", "productName": "Compu-Cart", "version": "$VERSION", "description": "Compu-Cart", "author": "Compu-Cart", "main": "electron/main.cjs" }
 JSON
 
+# Explicit metadata: without it packager searches parent folders for package.json "author" and stalls.
 npx @electron/packager "$STAGE/app" Compu-Cart --platform=win32 --arch=x64 \
-  --electron-version="$ELECTRON_VERSION" --out="$STAGE/pkg" --overwrite --app-version="$VERSION"
+  --electron-version="$ELECTRON_VERSION" --out="$STAGE/pkg" --overwrite --app-version="$VERSION" \
+  --win32metadata.CompanyName="Compu-Cart" --win32metadata.ProductName="Compu-Cart" \
+  --win32metadata.FileDescription="Compu-Cart"
 APPDIR="$STAGE/pkg/Compu-Cart-win32-x64"
 node "$PROJECT/electron/installer/stamp-exe.mjs" "$APPDIR/Compu-Cart.exe" "$PROJECT/electron/assets/icon.ico" "$VERSION" "$WORK/node_modules/resedit"
 
