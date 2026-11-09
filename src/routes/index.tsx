@@ -65,7 +65,7 @@ export function Index() {
     b.on("cart", setCart);
     b.on("integrity", setIntegrity);
     b.on("sync", setSync);
-    log("ok", "Pont matériel connecté — surveillance des lecteurs D: à Z:");
+    log("ok", "Pont matériel connecté — en attente d'un branchement (détection par événements Windows)");
   }, []);
 
   // Intro sequence then launch.
@@ -157,7 +157,7 @@ export function Index() {
             <div className="grid h-20 w-16 place-items-center rounded-sm bg-secondary font-display text-xs text-primary">{cart.state === "empty" ? "—" : "CC"}</div>
             <div>
               <p className="font-display text-sm">{cart.manifest?.title ?? "INSÉREZ UNE CARTOUCHE"}</p>
-              <p className="mt-2 text-xs text-muted-foreground">{cart.root ? `${cart.root} · ${cart.manifest?.executable}` : "En attente d'un événement de branchement…"}</p>
+              <p className="mt-2 text-xs text-muted-foreground">{cart.root ? [cart.root, cart.manifest?.executable].filter(Boolean).join(" · ") : "En attente d'un branchement…"}</p>
             </div>
             <span className="ml-auto rounded-sm bg-secondary px-3 py-1 text-xs uppercase tracking-widest text-primary">{cart.state}</span>
           </div>
