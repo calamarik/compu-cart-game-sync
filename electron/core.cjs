@@ -8,25 +8,55 @@ const { EventEmitter } = require("events");
 
 const MANIFEST = "compucart.json";
 
-/** 1. Hotplug: polls Windows drive letters (D:..Z:) for a cartridge manifest. */
+const WM_DEVICECHANGE = 0x0219;
+const DBT = { 0x0007: "change", 0x8000: "arrival", 0x8004: "removal" };
+/** Maps a WM_DEVICECHANGE wParam to an event kind (null = ignore). */
+const deviceEventKind = (wParam) => DBT[wParam] || null;
+
+/**
+ * 1. Hotplug: event-driven. Windows broadcasts WM_DEVICECHANGE when a volume
+ * arrives/leaves; notify() then scans drive letters a few times (mounting lags
+ * the event). No periodic polling unless pollMs is set (non-Windows dev only).
+ * Ejected roots are suppressed until a new arrival, so the scan never touches
+ * (and remounts) a dismounted volume.
+ */
 class HotplugWatcher extends EventEmitter {
-  constructor(intervalMs = 1500) {
+  constructor({ pollMs = 0, letters = "DEFGHIJKLMNOPQRSTUVWXYZ", exists, now = Date.now, rescanDelays = [300, 1500, 4000] } = {}) {
     super();
-    this.intervalMs = intervalMs;
+    this.pollMs = pollMs;
+    this.letters = letters;
+    this.exists = exists || ((root) => fs.existsSync(path.join(root, MANIFEST)));
+    this.now = now;
+    this.rescanDelays = rescanDelays;
     this.known = new Set();
+    this.suppressed = new Map();
+    this.pending = [];
   }
   start() {
-    this.timer = setInterval(() => this.scan(), this.intervalMs);
+    if (this.pollMs) this.timer = setInterval(() => this.scan(), this.pollMs);
     this.scan();
   }
   stop() {
     clearInterval(this.timer);
+    this.pending.forEach(clearTimeout);
+    this.pending = [];
+  }
+  notify(kind) {
+    if (kind === "arrival") for (const [root, at] of this.suppressed) if (this.now() - at > 2000) this.suppressed.delete(root);
+    this.pending.forEach(clearTimeout);
+    this.pending = this.rescanDelays.map((ms) => setTimeout(() => this.scan(), ms));
+  }
+  /** Forget a root after a safe eject; it is ignored until a new arrival event. */
+  suppress(root) {
+    this.known.delete(root);
+    this.suppressed.set(root, this.now());
   }
   scan() {
     const now = new Set();
-    for (const l of "DEFGHIJKLMNOPQRSTUVWXYZ") {
+    for (const l of this.letters) {
       const root = `${l}:\\`;
-      if (fs.existsSync(path.join(root, MANIFEST))) now.add(root);
+      if (this.suppressed.has(root)) continue;
+      if (this.exists(root)) now.add(root);
     }
     for (const r of now) if (!this.known.has(r)) this.emit("inserted", r);
     for (const r of this.known) if (!now.has(r)) this.emit("removed", r);
@@ -148,4 +178,45 @@ function launchGame(root, manifest) {
   });
 }
 
-module.exports = { HotplugWatcher, readManifest, verifyIntegrity, planSync, syncSaves, launchGame, safeCopy };
+/** "E:\\" -> "E". Only D..Z are cartridge letters. */
+function driveLetter(root) {
+  const m = /^([D-Z]):\\?$/i.exec(String(root || ""));
+  if (!m) throw new Error(`Lecteur invalide: ${root}`);
+  return m[1].toUpperCase();
+}
+
+const VETO_REASONS = { 1: "erreur inconnue", 2: "pilote Windows", 3: "un service l'utilise", 4: "Windows refuse le retrait", 5: "un pilote le bloque", 6: "un programme l'utilise", 7: "périphérique non retirable", 8: "fichiers encore ouverts", 9: "périphérique non retirable", 10: "pilote en cours d'arrêt", 11: "Windows refuse le retrait", 12: "pilote non désactivable" };
+
+/** Turns the eject script's output line into a result. */
+function parseEjectOutput(stdout) {
+  const line = String(stdout || "").trim().split(/\r?\n/).pop() || "";
+  if (line === "OK") return { status: "removed" };
+  if (line === "BUSY") return { status: "busy", detail: "Un programme utilise encore la cartouche (fichier ouvert)." };
+  const veto = /^VETO:(\d+):(.*)$/.exec(line);
+  if (veto) return { status: "flushed", detail: `Données écrites et volume démonté, mais Windows n'a pas déconnecté le périphérique (${VETO_REASONS[veto[1]] || "refus"}${veto[2] ? ` : ${veto[2]}` : ""}).` };
+  if (line.startsWith("ERR:")) return { status: "error", detail: line.slice(4) };
+  return { status: "error", detail: "Réponse inattendue de l'éjection Windows." };
+}
+
+/** Builds the PowerShell invocation; the script is passed encoded so execution policy for files does not apply. */
+function ejectCommand(root, script) {
+  const letter = driveLetter(root);
+  const encoded = Buffer.from(`$Lettre = '${letter}'\n${script}`, "utf16le").toString("base64");
+  return { file: "powershell.exe", args: ["-NoProfile", "-NonInteractive", "-WindowStyle", "Hidden", "-EncodedCommand", encoded] };
+}
+
+/** Safe eject: flush + lock + dismount the volume, then Windows device eject. */
+function ejectDrive(root, { spawnImpl = spawn, scriptPath = path.join(__dirname, "eject.ps1"), timeoutMs = 45000 } = {}) {
+  return new Promise((res, rej) => {
+    let cmd;
+    try { cmd = ejectCommand(root, fs.readFileSync(scriptPath, "utf8")); } catch (e) { return rej(e); }
+    const child = spawnImpl(cmd.file, cmd.args, { windowsHide: true });
+    let out = "";
+    const timer = setTimeout(() => { child.kill(); rej(new Error("Éjection trop longue — réessayez")); }, timeoutMs);
+    child.stdout.on("data", (d) => { out += d.toString("utf8"); });
+    child.on("error", (e) => { clearTimeout(timer); rej(e); });
+    child.on("close", () => { clearTimeout(timer); res(parseEjectOutput(out)); });
+  });
+}
+
+module.exports = { HotplugWatcher, WM_DEVICECHANGE, deviceEventKind, readManifest, verifyIntegrity, planSync, syncSaves, launchGame, safeCopy, driveLetter, parseEjectOutput, ejectCommand, ejectDrive };
