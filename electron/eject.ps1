@@ -1,6 +1,7 @@
 # Compu-Cart safe eject. $Lettre is prepended by core.cjs (validated D-Z).
 # Output (stdout, one line): OK | BUSY | VETO:<type>:<name> | ERR:<message>
 $ErrorActionPreference = 'Stop'
+[Console]::OutputEncoding = New-Object Text.UTF8Encoding($false)
 try {
 Add-Type -TypeDefinition @'
 using System;
