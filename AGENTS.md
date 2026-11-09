@@ -31,3 +31,7 @@ use the editor.
 
 - Keep the desktop renderer as an offline TanStack Router entry reusing the web console, with relative bundled assets and local fonts; the portable Windows app must not depend on a hosted preview or an SSR server.
 - Package Windows releases from a clean staging folder with @electron/packager; include only the desktop runtime, renderer, cartridge tools, and installation guide.
+- Build the Windows release with electron/installer/build-windows.sh: packager output wrapped in a per-user NSIS Setup.exe (makensis via nix, exe icon via resedit) because electron-builder and Wine are unusable in this sandbox.
+- Cartridge detection is event-driven (WM_DEVICECHANGE via hookWindowMessage, then short rescans); never reintroduce periodic drive polling on Windows, and never scan a root after safe eject until a new arrival (scanning would remount it).
+- Safe eject runs electron/eject.ps1 through powershell -EncodedCommand (flush, lock, dismount, CM_Request_Device_Eject) so file execution policy does not block it; keep the C# compatible with C# 5 (Windows PowerShell 5.1 Add-Type).
+- Autostart is owned by Electron setLoginItemSettings (value name "Compu-Cart", --background); the installer toggles it by running the exe with --configure-only --autostart=on|off rather than writing the Run key itself.
