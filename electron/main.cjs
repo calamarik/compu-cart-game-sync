@@ -27,6 +27,7 @@ function run() {
   let watcher;
   let currentCart;
   let launching = false;
+  let searching = false;
   let quitting = false;
   let autoShown = false;
   let trayHintShown = false;
@@ -83,6 +84,7 @@ function run() {
       { label: "Afficher Compu-Cart", click: showConsole },
       { label: currentCart?.title ? `▶ Jouer à ${currentCart.title}` : "▶ Jouer", enabled: !!canPlay(), click: () => playCurrent() },
       { label: currentCart ? `Éjecter la cartouche (${currentCart.root})` : "Éjecter la cartouche", enabled: !!canEject(), click: () => ejectCurrent() },
+      { label: "Rechercher une cartouche", enabled: !currentCart && !searching, click: () => searchCartridge() },
       { type: "separator" },
       { label: "Démarrer avec Windows", type: "checkbox", checked: autostartEnabled(), click: (item) => { setAutostart(item.checked); refreshTray(); } },
       { type: "separator" },
@@ -189,6 +191,39 @@ function run() {
     }
   }
 
+  const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+  /**
+   * "Rechercher" (window button, tray menu): looks for a cartridge that is physically plugged in, even one
+   * that was safely ejected earlier. Scans the drive letters; if nothing shows up, asks Windows to rescan its
+   * hardware and looks again. Only ever runs on an explicit click, never automatically.
+   */
+  async function searchCartridge() {
+    if (searching) return;
+    if (currentCart) { log("warn", "Une cartouche est déjà active : éjectez-la avant d'en chercher une autre"); return; }
+    searching = true;
+    refreshTray();
+    try {
+      log("info", "Recherche d'une cartouche branchée…");
+      watcher.manualSearch(); // a hit starts handleInsert synchronously (currentCart is set)
+      if (currentCart) return;
+      if (process.platform === "win32") {
+        const hw = await core.rescanHardware();
+        log(hw.status === "ok" ? "info" : "warn", hw.detail);
+        for (const ms of [1500, 2500]) {
+          await sleep(ms);
+          watcher.manualSearch();
+          if (currentCart) return;
+        }
+      }
+      log("warn", "Aucune cartouche trouvée. Si elle a été éjectée, débranchez-la puis rebranchez-la.");
+    } finally {
+      searching = false;
+      refreshTray();
+    }
+  }
+
+  ipcMain.handle("cc:search", () => searchCartridge());
   ipcMain.handle("cc:play", () => playCurrent());
   ipcMain.handle("cc:state", () => store.snapshot());
   ipcMain.handle("cc:launch", async (_e, root) => {

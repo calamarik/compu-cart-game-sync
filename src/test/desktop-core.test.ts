@@ -3,6 +3,7 @@ import { mkdtemp, mkdir, writeFile, readFile, utimes, rm } from "node:fs/promise
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { createHash } from "node:crypto";
+import { EventEmitter } from "node:events";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 const require = createRequire(import.meta.url);
@@ -146,6 +147,67 @@ describe("Console state kept for a late window", () => {
     expect(snap.logs.map((l: { msg: string }) => l.msg)).toEqual(["d", "c", "b"]);
     s.setCart({ state: "empty" }); s.setIntegrity(null); s.setSync(null);
     expect(s.snapshot()).toMatchObject({ cart: { state: "empty" }, integrity: null, sync: null });
+  });
+});
+
+describe("Manual search", () => {
+  it("looks at an ejected drive again only when the user asks, and reports it as manual", () => {
+    let t = 0;
+    const touched: string[] = [];
+    const w = new core.HotplugWatcher({ letters: "E", now: () => t, exists: (r: string) => { touched.push(r); return true; } });
+    const seen: string[][] = [];
+    w.on("inserted", (root: string, reason: string) => seen.push([root, reason]));
+    w.scan("device");
+    w.suppress("E:\\");
+    touched.length = 0;
+    w.scan("device");
+    w.scan("startup");
+    expect(touched).toEqual([]);
+    w.manualSearch();
+    expect(touched).toEqual(["E:\\"]);
+    expect(seen).toEqual([["E:\\", "device"], ["E:\\", "manual"]]);
+  });
+  it("reports nothing when no drive is there, then once when it shows up", () => {
+    let present = false;
+    const w = new core.HotplugWatcher({ letters: "E", exists: () => present });
+    const seen: string[] = [];
+    w.on("inserted", (_root: string, reason: string) => seen.push(reason));
+    w.manualSearch();
+    expect(seen).toEqual([]);
+    present = true;
+    w.manualSearch();
+    w.manualSearch();
+    expect(seen).toEqual(["manual"]);
+  });
+});
+
+describe("Windows hardware rescan", () => {
+  const fakeProcess = (code: number, output = "") => {
+    const child: any = new EventEmitter();
+    child.stdout = new EventEmitter();
+    child.stderr = new EventEmitter();
+    setTimeout(() => { if (output) child.stderr.emit("data", Buffer.from(output)); child.emit("close", code); }, 0);
+    return child;
+  };
+  it("asks Windows to rescan its devices with pnputil", async () => {
+    let call: { file: string; args: string[] } | undefined;
+    const spawnImpl = (file: string, args: string[]) => { call = { file, args }; return fakeProcess(0); };
+    expect(await core.rescanHardware({ spawnImpl })).toMatchObject({ status: "ok" });
+    expect(call).toEqual({ file: "pnputil.exe", args: ["/scan-devices"] });
+  });
+  it("reports a refusal, and says when administrator rights are needed", async () => {
+    const refused = await core.rescanHardware({ spawnImpl: () => fakeProcess(5, "Access is denied.") });
+    expect(refused.status).toBe("error");
+    expect(refused.detail).toContain("administrateur");
+    const other = await core.rescanHardware({ spawnImpl: () => fakeProcess(1) });
+    expect(other.status).toBe("error");
+    expect(other.detail).not.toContain("administrateur");
+  });
+  it("never throws: not startable, or too slow", async () => {
+    const missing = await core.rescanHardware({ spawnImpl: () => { throw new Error("ENOENT"); } });
+    expect(missing).toMatchObject({ status: "error" });
+    const slow = await core.rescanHardware({ spawnImpl: () => Object.assign(new EventEmitter(), { kill() {} }), timeoutMs: 10 });
+    expect(slow).toMatchObject({ status: "error" });
   });
 });
 

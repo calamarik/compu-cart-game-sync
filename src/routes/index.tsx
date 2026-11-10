@@ -26,6 +26,7 @@ type Bridge = {
   on: (ch: string, cb: (d: any) => void) => void;
   launch: (root: string) => Promise<void>;
   play?: () => Promise<void>;
+  search?: () => Promise<void>;
   state?: () => Promise<Snapshot>;
   eject?: () => Promise<void>;
   hide?: () => Promise<void>;
@@ -57,6 +58,7 @@ export function Index() {
   const [integrity, setIntegrity] = useState<Integrity | null>(null);
   const [sync, setSync] = useState<{ localDir: string; cartDir: string; plan: SyncItem[] } | null>(null);
   const [bridge, setBridge] = useState<Bridge | null>(null);
+  const [searching, setSearching] = useState(false);
   const timers = useRef<number[]>([]);
   const log = (level: Log["level"], msg: string) => setLogs((l) => [{ level, msg, at: Date.now() }, ...l].slice(0, 60));
 
@@ -135,6 +137,12 @@ export function Index() {
     }, 1200));
   };
   const canEject = !!cart.root && EJECTABLE.includes(cart.state);
+  const canSearch = !!bridge?.search && (cart.state === "empty" || cart.state === "ejected") && !searching;
+  const search = async () => {
+    if (!canSearch) return;
+    setSearching(true);
+    try { await bridge?.search?.(); } finally { setSearching(false); }
+  };
   const canPlay = cart.state === "ready" && !!cart.root;
   const play = () => {
     if (!canPlay) return;
@@ -158,6 +166,7 @@ export function Index() {
             <button onClick={() => simulate(true)} className="rounded-sm border border-destructive px-4 py-2 text-sm text-destructive hover:bg-destructive/10">Cartouche corrompue</button>
           </>)}
           <button onClick={eject} disabled={!canEject} title={canEject ? "Écrit les données puis déconnecte la cartouche" : "Disponible quand aucun jeu ni synchronisation n'est en cours"} className="rounded-sm border border-primary px-4 py-2 text-sm text-primary hover:bg-primary/10 disabled:cursor-not-allowed disabled:border-border disabled:text-muted-foreground disabled:hover:bg-transparent">⏏ Éjecter</button>
+          {bridge?.search && <button onClick={search} disabled={!canSearch} title="Cherche une cartouche déjà branchée, même éjectée, sans la débrancher" className="rounded-sm border px-4 py-2 text-sm hover:bg-secondary disabled:cursor-not-allowed disabled:text-muted-foreground disabled:hover:bg-transparent">{searching ? "Recherche…" : "🔍 Rechercher"}</button>}
           {bridge?.hide && <button onClick={() => bridge.hide?.()} className="rounded-sm border px-4 py-2 text-sm hover:bg-secondary">Réduire</button>}
           {bridge?.quit && <button onClick={() => bridge.quit?.()} className="rounded-sm border px-4 py-2 text-sm text-muted-foreground hover:bg-secondary">Quitter</button>}
         </div>

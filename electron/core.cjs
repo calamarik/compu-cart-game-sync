@@ -60,6 +60,14 @@ class HotplugWatcher extends EventEmitter {
   rescan(reason = "manual") {
     this.scan(reason);
   }
+  /**
+   * Explicit "Rechercher" click: forgets ejected drives and scans once (reason "manual": stops on "ready").
+   * The only case where an ejected drive is touched again without a new arrival event, and never automatically.
+   */
+  manualSearch() {
+    this.suppressed.clear();
+    this.scan("manual");
+  }
   /** Forget a root after a safe eject; it is ignored until a new arrival event. */
   suppress(root) {
     this.known.delete(root);
@@ -260,4 +268,28 @@ function ejectDrive(root, { spawnImpl = spawn, scriptPath = path.join(__dirname,
   });
 }
 
-module.exports = { HotplugWatcher, WM_DEVICECHANGE, deviceEventKind, autoPlays, nextStateAfterSync, StateStore, readManifest, verifyIntegrity, planSync, syncSaves, launchGame, safeCopy, driveLetter, parseEjectOutput, ejectCommand, ejectDrive };
+/**
+ * Best effort: asks Windows to re-enumerate hardware (pnputil /scan-devices), so a device that was
+ * safely ejected but is still plugged in can come back without being unplugged. May need administrator
+ * rights; never throws, always resolves with { status: "ok" | "error", detail }.
+ */
+function rescanHardware({ spawnImpl = spawn, timeoutMs = 20000 } = {}) {
+  return new Promise((res) => {
+    let done = false, child, out = "", timer;
+    const finish = (result) => { if (done) return; done = true; clearTimeout(timer); res(result); };
+    timer = setTimeout(() => { try { child && child.kill(); } catch {} finish({ status: "error", detail: "La relance de la détection Windows a pris trop de temps." }); }, timeoutMs);
+    try { child = spawnImpl("pnputil.exe", ["/scan-devices"], { windowsHide: true }); }
+    catch (e) { return finish({ status: "error", detail: `Détection Windows indisponible : ${e.message}` }); }
+    const collect = (d) => { out += d.toString("utf8"); };
+    if (child.stdout) child.stdout.on("data", collect);
+    if (child.stderr) child.stderr.on("data", collect);
+    child.on("error", (e) => finish({ status: "error", detail: `Détection Windows indisponible : ${e.message}` }));
+    child.on("close", (code) => {
+      if (code === 0) return finish({ status: "ok", detail: "Détection Windows relancée (nouvelle recherche de matériel)." });
+      const admin = code === 5 || /access is denied|accès refusé|administrat/i.test(out);
+      finish({ status: "error", detail: `Windows n'a pas relancé la détection (code ${code}${admin ? " : droits administrateur requis" : ""}).` });
+    });
+  });
+}
+
+module.exports = { HotplugWatcher, rescanHardware, WM_DEVICECHANGE, deviceEventKind, autoPlays, nextStateAfterSync, StateStore, readManifest, verifyIntegrity, planSync, syncSaves, launchGame, safeCopy, driveLetter, parseEjectOutput, ejectCommand, ejectDrive };

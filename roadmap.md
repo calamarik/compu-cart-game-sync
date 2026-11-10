@@ -17,5 +17,6 @@
 - [x] "Cartouche prête" notification balloon when starting in the background (click opens the console).
 - [x] The console asks the main process for the current state when it opens, so a cartridge detected before the window was listening is displayed.
 - [x] Tests and French guide updated, installer version set to 1.2.0 (build-windows.sh).
+- [x] "🔍 Rechercher" button (console + tray menu): looks again for a plugged cartridge, even one safely ejected, by scanning drive letters then asking Windows to rescan hardware (pnputil /scan-devices, best effort). Real-hardware result unknown: Windows may need a replug after a full eject.
 - [ ] Build Compu-Cart-Setup-1.2.0.exe (needs makensis, not available in the environment where this was written).
 - [ ] Test on real Windows hardware: USB already plugged at logon, plugged while running, background balloon, Play after leaving a game.
