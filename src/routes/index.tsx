@@ -23,7 +23,7 @@ type Log = { level: "info" | "ok" | "warn" | "error"; msg: string; at: number };
 type Integrity = { ok: boolean; results: { file: string; ok: boolean }[] };
 type Snapshot = { cart: Cart; integrity: Integrity | null; sync: { localDir: string; cartDir: string; plan: SyncItem[] } | null; logs: Log[] };
 type Bridge = {
-  on: (ch: string, cb: (d: any) => void) => void;
+  on: (ch: string, cb: (d: any) => void) => (() => void) | void;
   launch: (root: string) => Promise<void>;
   play?: () => Promise<void>;
   search?: () => Promise<void>;
@@ -60,20 +60,28 @@ export function Index() {
   const [bridge, setBridge] = useState<Bridge | null>(null);
   const [searching, setSearching] = useState(false);
   const timers = useRef<number[]>([]);
-  const log = (level: Log["level"], msg: string) => setLogs((l) => [{ level, msg, at: Date.now() }, ...l].slice(0, 60));
+  const announced = useRef(false);
+  const log =(level: Log["level"], msg: string) => setLogs((l) => [{ level, msg, at: Date.now() }, ...l].slice(0, 60));
 
   useEffect(() => {
     const b = (window as any).compucart as Bridge | undefined;
     if (!b) { log("warn", "Mode démo : aucun pont matériel (lancez l'app Windows)"); return; }
     setBridge(b);
-    b.on("log", (d) => setLogs((l) => [d, ...l].slice(0, 60)));
-    b.on("cart", setCart);
-    b.on("integrity", setIntegrity);
-    b.on("sync", setSync);
-    log("ok", "Pont matériel connecté — en attente d'un branchement (détection par événements Windows)");
+    // React StrictMode (dev server) runs effects twice: every listener must be removed on cleanup, or each message shows twice.
+    const off = [
+      b.on("log", (d) => setLogs((l) => [d, ...l].slice(0, 60))),
+      b.on("cart", setCart),
+      b.on("integrity", setIntegrity),
+      b.on("sync", setSync),
+    ];
+    let active = true;
+    if (!announced.current) {
+      announced.current = true;
+      log("ok", "Pont matériel connecté — en attente d'un branchement (détection par événements Windows)");
+    }
     // The window can open after a cartridge was already detected (start with Windows, hidden console): ask for the current state.
     b.state?.().then((s) => {
-      if (!s) return;
+      if (!s || !active) return;
       setCart(s.cart);
       setIntegrity(s.integrity);
       setSync(s.sync);
@@ -82,6 +90,10 @@ export function Index() {
         return [...live.filter((x) => !seen.has(`${x.at}|${x.msg}`)), ...s.logs].slice(0, 60);
       });
     }).catch(() => log("warn", "État de la console indisponible"));
+    return () => {
+      active = false;
+      off.forEach((stop) => stop?.());
+    };
   }, []);
 
   // Intro sequence then launch.
