@@ -135,6 +135,9 @@ function run() {
         notifyReady(manifest);
         return;
       }
+      // Windows (AutoPlay) often opens an Explorer window on the new drive a moment after it was detected and takes the focus:
+      // take the front back when the intro starts. Not a full fix, the Windows AutoPlay setting is (see the installation guide).
+      showConsole();
       cart.state = "intro";
       setCart({ state: "intro", root, manifest, intro: introPayload(root, manifest) });
     } catch (e) {

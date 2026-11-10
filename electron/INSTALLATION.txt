@@ -47,6 +47,15 @@ signal que Windows envoie lorsqu'une clé USB est branchée ou retirée, puis
 vérifie les lecteurs D: à Z: quelques fois pendant 4 secondes. Le reste du
 temps, il ne consomme pratiquement rien.
 
+Windows ouvre une fenêtre de l'Explorateur à chaque branchement :
+quand on branche la clé, Windows (Exécution automatique) peut ouvrir le dossier
+de la clé et prendre le focus à Compu-Cart. Pour l'éviter : Paramètres de
+Windows, Bluetooth et appareils (Périphériques sous Windows 10), Exécution
+automatique, puis pour « Lecteur amovible » choisissez « Ne rien faire ».
+Ce réglage s'applique à toutes vos clés USB, pas seulement aux cartouches ;
+vous pouvez le remettre sur « Ouvrir le dossier » quand vous voulez. Les
+libellés peuvent varier un peu selon votre version de Windows.
+
 Cartouche déjà branchée au démarrage : à l'ouverture de Compu-Cart (ou de
 votre session Windows), il cherche tout de suite une cartouche déjà présente,
 puis encore après 2, 6 et 15 secondes, le temps que Windows reconnaisse la clé.
