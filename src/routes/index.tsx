@@ -21,9 +21,12 @@ type Manifest = { id: string; title: string; executable: string };
 type Cart = { state: State; root?: string; manifest?: Manifest; intro?: { image: string | null; audio: string | null } };
 type Log = { level: "info" | "ok" | "warn" | "error"; msg: string; at: number };
 type Integrity = { ok: boolean; results: { file: string; ok: boolean }[] };
+type Snapshot = { cart: Cart; integrity: Integrity | null; sync: { localDir: string; cartDir: string; plan: SyncItem[] } | null; logs: Log[] };
 type Bridge = {
-  on: (ch: string, cb: (d: any) => void) => void;
+  on: (ch: string, cb: (d: any) => void) => (() => void) | void;
   launch: (root: string) => Promise<void>;
+  play?: () => Promise<void>;
+  state?: () => Promise<Snapshot>;
   eject?: () => Promise<void>;
   hide?: () => Promise<void>;
   quit?: () => Promise<void>;
@@ -55,17 +58,40 @@ export function Index() {
   const [sync, setSync] = useState<{ localDir: string; cartDir: string; plan: SyncItem[] } | null>(null);
   const [bridge, setBridge] = useState<Bridge | null>(null);
   const timers = useRef<number[]>([]);
-  const log = (level: Log["level"], msg: string) => setLogs((l) => [{ level, msg, at: Date.now() }, ...l].slice(0, 60));
+  const announced = useRef(false);
+  const log =(level: Log["level"], msg: string) => setLogs((l) => [{ level, msg, at: Date.now() }, ...l].slice(0, 60));
 
   useEffect(() => {
     const b = (window as any).compucart as Bridge | undefined;
     if (!b) { log("warn", "Mode démo : aucun pont matériel (lancez l'app Windows)"); return; }
     setBridge(b);
-    b.on("log", (d) => setLogs((l) => [d, ...l].slice(0, 60)));
-    b.on("cart", setCart);
-    b.on("integrity", setIntegrity);
-    b.on("sync", setSync);
-    log("ok", "Pont matériel connecté — en attente d'un branchement (détection par événements Windows)");
+    // React StrictMode (dev server) runs effects twice: every listener must be removed on cleanup, or each message shows twice.
+    const off = [
+      b.on("log", (d) => setLogs((l) => [d, ...l].slice(0, 60))),
+      b.on("cart", setCart),
+      b.on("integrity", setIntegrity),
+      b.on("sync", setSync),
+    ];
+    let active = true;
+    if (!announced.current) {
+      announced.current = true;
+      log("ok", "Pont matériel connecté — en attente d'un branchement (détection par événements Windows)");
+    }
+    // The window can open after a cartridge was already detected (start with Windows, hidden console): ask for the current state.
+    b.state?.().then((s) => {
+      if (!s || !active) return;
+      setCart(s.cart);
+      setIntegrity(s.integrity);
+      setSync(s.sync);
+      setLogs((live) => {
+        const seen = new Set(s.logs.map((x) => `${x.at}|${x.msg}`));
+        return [...live.filter((x) => !seen.has(`${x.at}|${x.msg}`)), ...s.logs].slice(0, 60);
+      });
+    }).catch(() => log("warn", "État de la console indisponible"));
+    return () => {
+      active = false;
+      off.forEach((stop) => stop?.());
+    };
   }, []);
 
   // Intro sequence then launch.
@@ -121,6 +147,12 @@ export function Index() {
     }, 1200));
   };
   const canEject = !!cart.root && EJECTABLE.includes(cart.state);
+  const canPlay = cart.state === "ready" && !!cart.root;
+  const play = () => {
+    if (!canPlay) return;
+    if (bridge?.play) { bridge.play(); return; }
+    setCart((c) => ({ ...c, state: "intro" })); // demo mode: same intro + simulated launch
+  };
 
   const activeIdx = STEPS.findIndex((s) => s.key.includes(cart.state));
   const levelCls = { info: "text-muted-foreground", ok: "text-success", warn: "text-warn", error: "text-destructive" };
@@ -158,8 +190,9 @@ export function Index() {
             <div>
               <p className="font-display text-sm">{cart.state === "ejected" ? "CARTOUCHE ÉJECTÉE" : cart.manifest?.title ?? "INSÉREZ UNE CARTOUCHE"}</p>
               <p className="mt-2 text-xs text-muted-foreground">{cart.root ? [cart.root, cart.manifest?.executable].filter(Boolean).join(" · ") : "En attente d'un branchement…"}</p>
+              {canPlay && <button onClick={play} className="mt-4 rounded-sm bg-primary px-5 py-2 text-sm font-bold text-primary-foreground hover:opacity-90">▶ Jouer</button>}
             </div>
-            <span className="ml-auto rounded-sm bg-secondary px-3 py-1 text-xs uppercase tracking-widest text-primary">{cart.state}</span>
+            <span className="ml-auto rounded-sm bg-secondary px-3 py-1 text-xs uppercase tracking-widest text-primary">{cart.state === "ready" ? "prête" : cart.state}</span>
           </div>
 
           <ol className="mt-6 grid grid-cols-4 gap-2">

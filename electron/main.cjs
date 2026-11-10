@@ -7,12 +7,16 @@ const LOGIN = { path: process.execPath, args: ["--background"], name: "Compu-Car
 const autostartEnabled = () => app.getLoginItemSettings(LOGIN).openAtLogin;
 const setAutostart = (on) => app.setLoginItemSettings({ ...LOGIN, openAtLogin: on });
 const flag = (argv, name) => argv.find((a) => a.startsWith(`--${name}=`))?.split("=")[1];
+const settingsFile = () => path.join(app.getPath("userData"), "settings.json");
+const autoplayGuard = () => new core.AutoplayGuard({ backupFile: path.join(app.getPath("userData"), "autoplay-backup.json") });
 
 if (process.argv.includes("--configure-only")) {
   // Used by the installer/uninstaller: apply settings and exit without UI.
   app.whenReady().then(() => {
     const auto = flag(process.argv, "autostart");
     if (auto) setAutostart(auto === "on");
+    // The uninstaller kills Compu-Cart, so it may not have restored the Windows AutoPlay setting itself.
+    if (flag(process.argv, "autoplay") === "restore" && process.platform === "win32") autoplayGuard().restore();
     app.exit(0);
   });
 } else if (!app.requestSingleInstanceLock()) {
@@ -28,13 +32,23 @@ function run() {
   let currentCart;
   let launching = false;
   let quitting = false;
+  const autoplay = autoplayGuard();
+  let settings = core.readSettings(settingsFile());
   let autoShown = false;
   let trayHintShown = false;
   const startHidden = process.argv.includes("--background");
   const icon = path.join(__dirname, "assets", process.platform === "win32" ? "icon.ico" : "icon.png");
 
+  const store = new core.StateStore();
   const alive = () => win && !win.isDestroyed();
-  const send = (ch, data) => alive() && win.webContents.send(ch, data);
+  // Every update is also kept in the store, so a window that opens after a detection can ask for it (cc:state).
+  const send = (ch, data) => {
+    if (ch === "cc:cart") store.setCart(data);
+    else if (ch === "cc:integrity") store.setIntegrity(data);
+    else if (ch === "cc:sync") store.setSync(data);
+    else if (ch === "cc:log") store.addLog(data);
+    return alive() && win.webContents.send(ch, data);
+  };
   const log = (level, msg) => send("cc:log", { level, msg, at: Date.now() });
   const setCart = (data) => { send("cc:cart", data); refreshTray(); };
 
@@ -59,6 +73,34 @@ function run() {
   }
 
   const canEject = () => currentCart && !launching && !currentCart.ejecting && ["ready", "intro", "corrupt", "error"].includes(currentCart.state);
+  const canPlay = () => currentCart && !launching && !currentCart.ejecting && currentCart.state === "ready";
+
+  /** Windows balloon when a cartridge found at startup is ready while the console is hidden (background start). */
+  function notifyReady(manifest) {
+    if (process.platform !== "win32" || !tray || (alive() && win.isVisible())) return;
+    tray.displayBalloon({ title: "Cartouche prête", content: `${manifest.title} est prête. Cliquez ici, puis sur « Jouer ».`, iconType: "info" });
+  }
+
+  /** Applies the saved option at startup. With the option off, a backup left by a crash is restored. */
+  function syncAutoplayAtStartup() {
+    if (process.platform !== "win32") return;
+    if (settings.disableAutoplay) {
+      const r = autoplay.enable();
+      log(r.ok ? "info" : "warn", r.detail);
+    } else if (autoplay.hasBackup()) {
+      const r = autoplay.restore();
+      log(r.ok ? "info" : "warn", r.detail);
+    }
+  }
+
+  /** Tray checkbox: saves the choice, then turns the Windows AutoPlay setting off or back to what it was. */
+  function setAutoplayOption(on) {
+    const r = on ? autoplay.enable() : autoplay.restore();
+    log(r.ok ? "info" : "warn", r.detail);
+    settings = { ...settings, disableAutoplay: on && r.ok };
+    try { core.writeSettings(settingsFile(), settings); } catch (e) { log("warn", `Option non enregistrée : ${e.message}`); }
+    refreshTray();
+  }
 
   function refreshTray() {
     if (!tray) return;
@@ -66,23 +108,38 @@ function run() {
     tray.setToolTip(currentCart ? `Compu-Cart — ${currentCart.title || currentCart.root}` : "Compu-Cart — en attente de cartouche");
     tray.setContextMenu(Menu.buildFromTemplate([
       { label: "Afficher Compu-Cart", click: showConsole },
+      { label: currentCart?.title ? `▶ Jouer à ${currentCart.title}` : "▶ Jouer", enabled: !!canPlay(), click: () => playCurrent() },
       { label: currentCart ? `Éjecter la cartouche (${currentCart.root})` : "Éjecter la cartouche", enabled: !!canEject(), click: () => ejectCurrent() },
       { type: "separator" },
       { label: "Démarrer avec Windows", type: "checkbox", checked: autostartEnabled(), click: (item) => { setAutostart(item.checked); refreshTray(); } },
+      ...(process.platform === "win32" ? [{ label: "Désactiver l'exécution automatique de Windows pendant que Compu-Cart tourne", type: "checkbox", checked: !!settings.disableAutoplay, click: (item) => setAutoplayOption(item.checked) }] : []),
       { type: "separator" },
       { label: running ? "Quitter (jeu en cours…)" : "Quitter", enabled: !running, click: () => { quitting = true; app.quit(); } },
     ]));
   }
 
-  async function handleInsert(root) {
+  /** Intro image and sound of the cartridge as data URLs (null when absent). */
+  function introPayload(root, manifest) {
+    const asset = (rel, mime) => {
+      if (!rel) return null;
+      const f = path.join(root, rel);
+      return fs.existsSync(f) ? `data:${mime};base64,${fs.readFileSync(f).toString("base64")}` : null;
+    };
+    return { image: asset(manifest.intro?.image, "image/png"), audio: asset(manifest.intro?.audio, "audio/mpeg") };
+  }
+
+  /** reason "startup": cartridge already there at launch (stops on "Prête"); "device": plugged while running (intro, then the game starts by itself). */
+  async function handleInsert(root, reason = "device") {
     if (currentCart) { log("warn", `Une cartouche est déjà active — ${root} ignoré`); return; }
     const cart = { root, state: "verifying" };
     currentCart = cart;
-    if (!win.isVisible()) { autoShown = true; showConsole(); }
+    // Only a plug-in event brings the console to the front by itself; a cartridge found at launch must not take over the screen.
+    if (core.autoPlays(reason) && !win.isVisible()) { autoShown = true; showConsole(); }
     try {
-      log("info", `Cartouche détectée sur ${root}`);
+      log("info", core.autoPlays(reason) ? `Cartouche détectée sur ${root}` : `Cartouche déjà présente sur ${root}`);
       const manifest = await core.readManifest(root);
       cart.title = manifest.title;
+      cart.manifest = manifest;
       setCart({ state: "verifying", root, manifest });
       const integrity = await core.verifyIntegrity(root, manifest);
       if (currentCart !== cart) return;
@@ -99,13 +156,18 @@ function run() {
       if (currentCart !== cart) return;
       send("cc:sync", sync);
       log("ok", `Sauvegardes synchronisées (${sync.plan.filter((p) => p.action !== "skip").length} fichier(s))`);
-      const asset = (rel, mime) => {
-        if (!rel) return null;
-        const f = path.join(root, rel);
-        return fs.existsSync(f) ? `data:${mime};base64,${fs.readFileSync(f).toString("base64")}` : null;
-      };
+      if (core.nextStateAfterSync(reason) === "ready") {
+        cart.state = "ready";
+        setCart({ state: "ready", root, manifest });
+        log("ok", "Cartouche prête — cliquez sur « Jouer » pour lancer le jeu");
+        notifyReady(manifest);
+        return;
+      }
+      // Windows (AutoPlay) often opens an Explorer window on the new drive a moment after it was detected and takes the focus:
+      // take the front back when the intro starts. Not a full fix, the Windows AutoPlay setting is (see the installation guide).
+      showConsole();
       cart.state = "intro";
-      setCart({ state: "intro", root, manifest, intro: { image: asset(manifest.intro.image, "image/png"), audio: asset(manifest.intro.audio, "audio/mpeg") } });
+      setCart({ state: "intro", root, manifest, intro: introPayload(root, manifest) });
     } catch (e) {
       if (currentCart !== cart) return;
       log("error", e.message);
@@ -144,6 +206,22 @@ function run() {
     if (currentCart === cart) { cart.ejecting = false; cart.state = previous; setCart({ state: previous, root: cart.root }); }
   }
 
+  /** "Jouer" (window button, tray menu): same path as an automatic start: intro, then cc:launch re-checks integrity and starts the game. */
+  function playCurrent() {
+    const cart = currentCart;
+    if (!canPlay() || !cart.manifest) { log("warn", launching ? "Un jeu est déjà en cours" : "Aucune cartouche prête à jouer"); return; }
+    try {
+      const intro = introPayload(cart.root, cart.manifest);
+      showConsole();
+      cart.state = "intro";
+      setCart({ state: "intro", root: cart.root, manifest: cart.manifest, intro });
+    } catch (e) {
+      log("error", e.message);
+    }
+  }
+
+  ipcMain.handle("cc:play", () => playCurrent());
+  ipcMain.handle("cc:state", () => store.snapshot());
   ipcMain.handle("cc:launch", async (_e, root) => {
     const cart = currentCart;
     if (!cart || cart.root !== root || cart.state !== "intro" || launching) return;
@@ -193,6 +271,7 @@ function run() {
     win.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
     win.webContents.on("will-navigate", (event) => event.preventDefault());
     win.on("close", (event) => { if (!quitting) { event.preventDefault(); hideConsole(); } });
+    win.on("session-end", () => { if (process.platform === "win32") autoplay.restore(); }); // logoff or shutdown
     if (app.isPackaged || !process.env.COMPUCART_URL) win.loadFile(path.join(__dirname, "renderer", "index.html"));
     else win.loadURL(process.env.COMPUCART_URL);
 
@@ -204,6 +283,8 @@ function run() {
     tray = new Tray(nativeImage.createFromPath(icon));
     tray.on("click", showConsole);
     tray.on("double-click", showConsole);
+    tray.on("balloon-click", showConsole);
+    syncAutoplayAtStartup();
     refreshTray();
 
     if (process.platform === "win32") {
@@ -230,6 +311,8 @@ function run() {
       watcher.start();
     });
   });
-  app.on("before-quit", () => { quitting = true; watcher?.stop(); });
+  // Put the Windows AutoPlay setting back when Compu-Cart stops (the saved option stays, so the next start applies it again).
+  const restoreAutoplay = () => { if (process.platform === "win32") autoplay.restore(); };
+  app.on("before-quit", () => { quitting = true; watcher?.stop(); restoreAutoplay(); });
   app.on("window-all-closed", () => app.quit());
 }

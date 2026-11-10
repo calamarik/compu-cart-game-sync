@@ -106,6 +106,7 @@ Section "Uninstall"
   nsExec::Exec 'taskkill /F /IM "${EXE}"'
   Sleep 1000
   ExecWait '"$INSTDIR\${EXE}" --configure-only --autostart=off'
+  ExecWait '"$INSTDIR\${EXE}" --configure-only --autoplay=restore'
   DeleteRegValue HKCU "${RUN_KEY}" "Compu-Cart"
   Delete "$DESKTOP\Compu-Cart.lnk"
   RMDir /r "$SMPROGRAMS\Compu-Cart"
