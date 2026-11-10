@@ -149,6 +149,107 @@ describe("Console state kept for a late window", () => {
   });
 });
 
+describe("Windows AutoPlay option", () => {
+  /** In-memory stand-in for reg.exe: only the DisableAutoplay value. null = value absent. */
+  function fakeReg(initial: number | null) {
+    const state = { value: initial, writes: 0, failWrites: false };
+    const run = (args: string[]) => {
+      if (args[0] === "query") {
+        return state.value === null
+          ? { code: 1, out: "ERROR: The system was unable to find the specified registry key or value." }
+          : { code: 0, out: `\nHKEY_CURRENT_USER\\Software\\...\\AutoplayHandlers\n    DisableAutoplay    REG_DWORD    0x${state.value.toString(16)}\n\n` };
+      }
+      if (state.failWrites) return { code: 1, out: "ERROR: Access is denied." };
+      if (args[0] === "add") { state.value = Number(args[args.indexOf("/d") + 1]); state.writes++; return { code: 0, out: "" }; }
+      if (args[0] === "delete") { state.value = null; state.writes++; return { code: 0, out: "" }; }
+      return { code: 1, out: "" };
+    };
+    return { state, run };
+  }
+  async function guard(initial: number | null) {
+    const dir = await mkdtemp(path.join(tmpdir(), "cc-autoplay-"));
+    directories.push(dir);
+    const reg = fakeReg(initial);
+    const g = new core.AutoplayGuard({ backupFile: path.join(dir, "sub", "autoplay-backup.json"), run: reg.run });
+    return { g, reg, dir };
+  }
+
+  it("is off by default and settings survive a missing or broken file", async () => {
+    const dir = await mkdtemp(path.join(tmpdir(), "cc-settings-"));
+    directories.push(dir);
+    const file = path.join(dir, "settings.json");
+    expect(core.readSettings(file)).toEqual({ disableAutoplay: false });
+    core.writeSettings(file, { disableAutoplay: true });
+    expect(core.readSettings(file)).toEqual({ disableAutoplay: true });
+    await writeFile(file, "{ not json");
+    expect(core.readSettings(file)).toEqual({ disableAutoplay: false });
+  });
+  it("turns AutoPlay off, then puts back the previous value (set to 0)", async () => {
+    const { g, reg } = await guard(0);
+    expect(g.enable().ok).toBe(true);
+    expect(reg.state.value).toBe(1);
+    expect(g.hasBackup()).toBe(true);
+    expect(g.restore().ok).toBe(true);
+    expect(reg.state.value).toBe(0);
+    expect(g.hasBackup()).toBe(false);
+  });
+  it("removes the value again when there was none before", async () => {
+    const { g, reg } = await guard(null);
+    g.enable();
+    expect(reg.state.value).toBe(1);
+    g.restore();
+    expect(reg.state.value).toBeNull();
+    expect(g.hasBackup()).toBe(false);
+  });
+  it("keeps the ORIGINAL value when enabled twice (a crash then a restart)", async () => {
+    const { g, reg } = await guard(0);
+    g.enable();
+    g.enable(); // value is already 1: must not be saved as the "previous" one
+    g.restore();
+    expect(reg.state.value).toBe(0);
+  });
+  it("restores a leftover backup after a crash, from a new guard on the same backup file", async () => {
+    const { g, reg, dir } = await guard(0);
+    g.enable();
+    const later = new core.AutoplayGuard({ backupFile: path.join(dir, "sub", "autoplay-backup.json"), run: reg.run });
+    expect(later.hasBackup()).toBe(true);
+    later.restore();
+    expect(reg.state.value).toBe(0);
+  });
+  it("leaves a value alone if the user changed it by hand in the meantime", async () => {
+    const { g, reg } = await guard(0);
+    g.enable();
+    reg.state.value = 5;
+    expect(g.restore().ok).toBe(true);
+    expect(reg.state.value).toBe(5);
+    expect(g.hasBackup()).toBe(false);
+  });
+  it("does nothing when there is nothing to restore", async () => {
+    const { g, reg } = await guard(1);
+    expect(g.restore()).toMatchObject({ ok: true });
+    expect(reg.state.writes).toBe(0);
+    expect(reg.state.value).toBe(1);
+  });
+  it("reports a refused change without keeping a backup, and without throwing", async () => {
+    const { g, reg } = await guard(0);
+    reg.state.failWrites = true;
+    const r = g.enable();
+    expect(r.ok).toBe(false);
+    expect(g.hasBackup()).toBe(false);
+    expect(reg.state.value).toBe(0);
+  });
+  it("keeps the backup when the restore is refused, so that the next start can retry", async () => {
+    const { g, reg } = await guard(0);
+    g.enable();
+    reg.state.failWrites = true;
+    expect(g.restore().ok).toBe(false);
+    expect(g.hasBackup()).toBe(true);
+    reg.state.failWrites = false;
+    expect(g.restore().ok).toBe(true);
+    expect(reg.state.value).toBe(0);
+  });
+});
+
 describe("Safe eject", () => {
   it("accepts only cartridge drive letters D to Z", () => {
     expect(core.driveLetter("e:\\")).toBe("E");

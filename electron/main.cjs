@@ -7,12 +7,16 @@ const LOGIN = { path: process.execPath, args: ["--background"], name: "Compu-Car
 const autostartEnabled = () => app.getLoginItemSettings(LOGIN).openAtLogin;
 const setAutostart = (on) => app.setLoginItemSettings({ ...LOGIN, openAtLogin: on });
 const flag = (argv, name) => argv.find((a) => a.startsWith(`--${name}=`))?.split("=")[1];
+const settingsFile = () => path.join(app.getPath("userData"), "settings.json");
+const autoplayGuard = () => new core.AutoplayGuard({ backupFile: path.join(app.getPath("userData"), "autoplay-backup.json") });
 
 if (process.argv.includes("--configure-only")) {
   // Used by the installer/uninstaller: apply settings and exit without UI.
   app.whenReady().then(() => {
     const auto = flag(process.argv, "autostart");
     if (auto) setAutostart(auto === "on");
+    // The uninstaller kills Compu-Cart, so it may not have restored the Windows AutoPlay setting itself.
+    if (flag(process.argv, "autoplay") === "restore" && process.platform === "win32") autoplayGuard().restore();
     app.exit(0);
   });
 } else if (!app.requestSingleInstanceLock()) {
@@ -28,6 +32,8 @@ function run() {
   let currentCart;
   let launching = false;
   let quitting = false;
+  const autoplay = autoplayGuard();
+  let settings = core.readSettings(settingsFile());
   let autoShown = false;
   let trayHintShown = false;
   const startHidden = process.argv.includes("--background");
@@ -75,6 +81,27 @@ function run() {
     tray.displayBalloon({ title: "Cartouche prête", content: `${manifest.title} est prête. Cliquez ici, puis sur « Jouer ».`, iconType: "info" });
   }
 
+  /** Applies the saved option at startup. With the option off, a backup left by a crash is restored. */
+  function syncAutoplayAtStartup() {
+    if (process.platform !== "win32") return;
+    if (settings.disableAutoplay) {
+      const r = autoplay.enable();
+      log(r.ok ? "info" : "warn", r.detail);
+    } else if (autoplay.hasBackup()) {
+      const r = autoplay.restore();
+      log(r.ok ? "info" : "warn", r.detail);
+    }
+  }
+
+  /** Tray checkbox: saves the choice, then turns the Windows AutoPlay setting off or back to what it was. */
+  function setAutoplayOption(on) {
+    const r = on ? autoplay.enable() : autoplay.restore();
+    log(r.ok ? "info" : "warn", r.detail);
+    settings = { ...settings, disableAutoplay: on && r.ok };
+    try { core.writeSettings(settingsFile(), settings); } catch (e) { log("warn", `Option non enregistrée : ${e.message}`); }
+    refreshTray();
+  }
+
   function refreshTray() {
     if (!tray) return;
     const running = launching;
@@ -85,6 +112,7 @@ function run() {
       { label: currentCart ? `Éjecter la cartouche (${currentCart.root})` : "Éjecter la cartouche", enabled: !!canEject(), click: () => ejectCurrent() },
       { type: "separator" },
       { label: "Démarrer avec Windows", type: "checkbox", checked: autostartEnabled(), click: (item) => { setAutostart(item.checked); refreshTray(); } },
+      ...(process.platform === "win32" ? [{ label: "Désactiver l'exécution automatique de Windows pendant que Compu-Cart tourne", type: "checkbox", checked: !!settings.disableAutoplay, click: (item) => setAutoplayOption(item.checked) }] : []),
       { type: "separator" },
       { label: running ? "Quitter (jeu en cours…)" : "Quitter", enabled: !running, click: () => { quitting = true; app.quit(); } },
     ]));
@@ -243,6 +271,7 @@ function run() {
     win.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
     win.webContents.on("will-navigate", (event) => event.preventDefault());
     win.on("close", (event) => { if (!quitting) { event.preventDefault(); hideConsole(); } });
+    win.on("session-end", () => { if (process.platform === "win32") autoplay.restore(); }); // logoff or shutdown
     if (app.isPackaged || !process.env.COMPUCART_URL) win.loadFile(path.join(__dirname, "renderer", "index.html"));
     else win.loadURL(process.env.COMPUCART_URL);
 
@@ -255,6 +284,7 @@ function run() {
     tray.on("click", showConsole);
     tray.on("double-click", showConsole);
     tray.on("balloon-click", showConsole);
+    syncAutoplayAtStartup();
     refreshTray();
 
     if (process.platform === "win32") {
@@ -281,6 +311,8 @@ function run() {
       watcher.start();
     });
   });
-  app.on("before-quit", () => { quitting = true; watcher?.stop(); });
+  // Put the Windows AutoPlay setting back when Compu-Cart stops (the saved option stays, so the next start applies it again).
+  const restoreAutoplay = () => { if (process.platform === "win32") autoplay.restore(); };
+  app.on("before-quit", () => { quitting = true; watcher?.stop(); restoreAutoplay(); });
   app.on("window-all-closed", () => app.quit());
 }

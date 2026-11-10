@@ -55,6 +55,15 @@ automatique, puis pour « Lecteur amovible » choisissez « Ne rien faire ».
 Ce réglage s'applique à toutes vos clés USB, pas seulement aux cartouches ;
 vous pouvez le remettre sur « Ouvrir le dossier » quand vous voulez. Les
 libellés peuvent varier un peu selon votre version de Windows.
+Option automatique : dans le menu de l'icône, cochez « Désactiver l'exécution
+automatique de Windows pendant que Compu-Cart tourne » (décochée par défaut).
+Compu-Cart garde alors l'Exécution automatique éteinte pendant qu'il tourne,
+pour tous vos lecteurs amovibles, et remet votre réglage d'origine quand il
+se ferme (ou à son prochain démarrage s'il a été arrêté brutalement, ou à la
+désinstallation). Si vous modifiez ce réglage à la main pendant ce temps,
+Compu-Cart ne l'écrase pas. Le changement est limité à votre compte Windows
+et ne demande pas de droits administrateur. S'il ne prend pas effet tout de
+suite sur votre Windows, utilisez le réglage manuel ci-dessus.
 
 Cartouche déjà branchée au démarrage : à l'ouverture de Compu-Cart (ou de
 votre session Windows), il cherche tout de suite une cartouche déjà présente,

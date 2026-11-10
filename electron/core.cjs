@@ -3,7 +3,7 @@ const fs = require("fs");
 const fsp = require("fs/promises");
 const path = require("path");
 const crypto = require("crypto");
-const { spawn } = require("child_process");
+const { spawn, spawnSync } = require("child_process");
 const { EventEmitter } = require("events");
 
 const MANIFEST = "compucart.json";
@@ -260,4 +260,80 @@ function ejectDrive(root, { spawnImpl = spawn, scriptPath = path.join(__dirname,
   });
 }
 
-module.exports = { HotplugWatcher, WM_DEVICECHANGE, deviceEventKind, autoPlays, nextStateAfterSync, StateStore, readManifest, verifyIntegrity, planSync, syncSaves, launchGame, safeCopy, driveLetter, parseEjectOutput, ejectCommand, ejectDrive };
+/** Compu-Cart's own options (userData/settings.json). Unknown or unreadable file: defaults. */
+const DEFAULT_SETTINGS = { disableAutoplay: false };
+function readSettings(file) {
+  try { return { ...DEFAULT_SETTINGS, ...JSON.parse(fs.readFileSync(file, "utf8")) }; } catch { return { ...DEFAULT_SETTINGS }; }
+}
+function writeSettings(file, settings) {
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  fs.writeFileSync(file, JSON.stringify(settings, null, 2));
+}
+
+const AUTOPLAY_KEY = "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\AutoplayHandlers";
+const AUTOPLAY_VALUE = "DisableAutoplay";
+
+/** Runs reg.exe and waits: { code, out }. Synchronous so that a restore finishes before the app exits. */
+function runReg(args) {
+  const r = spawnSync("reg.exe", args, { windowsHide: true, encoding: "utf8", timeout: 8000 });
+  return { code: r.status ?? 1, out: `${r.stdout || ""}${r.stderr || ""}` };
+}
+
+/**
+ * Optional: turns Windows AutoPlay off for this user while Compu-Cart runs, so Windows does not open an
+ * Explorer window on the cartridge and take the focus. The previous value is written to a backup file BEFORE
+ * anything is changed and put back by restore(); a leftover backup after a crash is restored at the next start.
+ * restore() never overwrites a value the user changed by hand in the meantime. Current user only (HKCU), no admin rights.
+ * Every method returns { ok, detail } and never throws.
+ */
+class AutoplayGuard {
+  constructor({ backupFile, run = runReg } = {}) {
+    this.backupFile = backupFile;
+    this.run = run;
+  }
+  /** Current registry value: { present: false } or { present: true, value: <number> }. */
+  read() {
+    const r = this.run(["query", AUTOPLAY_KEY, "/v", AUTOPLAY_VALUE]);
+    const m = r.code === 0 && new RegExp(`${AUTOPLAY_VALUE}\\s+REG_DWORD\\s+0x([0-9a-fA-F]+)`, "i").exec(r.out);
+    return m ? { present: true, value: parseInt(m[1], 16) } : { present: false };
+  }
+  hasBackup() { return fs.existsSync(this.backupFile); }
+  write(value) {
+    return this.run(["add", AUTOPLAY_KEY, "/v", AUTOPLAY_VALUE, "/t", "REG_DWORD", "/d", String(value), "/f"]).code === 0;
+  }
+  enable() {
+    try {
+      if (!this.hasBackup()) {
+        fs.mkdirSync(path.dirname(this.backupFile), { recursive: true });
+        fs.writeFileSync(this.backupFile, JSON.stringify(this.read())); // original value saved before touching anything
+      }
+      if (this.write(1)) return { ok: true, detail: "Exécution automatique de Windows désactivée tant que Compu-Cart tourne." };
+      if (!this.hasBackup()) return { ok: false, detail: "Impossible de modifier l'Exécution automatique de Windows." };
+      this.restore(); // nothing was changed: drop the backup again
+      return { ok: false, detail: "Impossible de modifier l'Exécution automatique de Windows." };
+    } catch (e) {
+      return { ok: false, detail: `Exécution automatique : ${e.message}` };
+    }
+  }
+  restore() {
+    try {
+      if (!this.hasBackup()) return { ok: true, detail: "" };
+      let original;
+      try { original = JSON.parse(fs.readFileSync(this.backupFile, "utf8")); } catch { original = null; }
+      const now = this.read();
+      let ok = true;
+      // Only undo what we did: if the value is no longer the one we set, the user changed it and it is left alone.
+      if (original && now.present && now.value === 1) {
+        if (original.present) ok = this.write(original.value);
+        else ok = this.run(["delete", AUTOPLAY_KEY, "/v", AUTOPLAY_VALUE, "/f"]).code === 0;
+      }
+      if (!ok) return { ok: false, detail: "Impossible de remettre l'Exécution automatique de Windows comme avant : elle sera restaurée au prochain démarrage de Compu-Cart." };
+      fs.rmSync(this.backupFile, { force: true });
+      return { ok: true, detail: "Exécution automatique de Windows remise comme avant." };
+    } catch (e) {
+      return { ok: false, detail: `Exécution automatique : ${e.message}` };
+    }
+  }
+}
+
+module.exports = { HotplugWatcher, DEFAULT_SETTINGS, readSettings, writeSettings, AutoplayGuard, WM_DEVICECHANGE, deviceEventKind, autoPlays, nextStateAfterSync, StateStore, readManifest, verifyIntegrity, planSync, syncSaves, launchGame, safeCopy, driveLetter, parseEjectOutput, ejectCommand, ejectDrive };
