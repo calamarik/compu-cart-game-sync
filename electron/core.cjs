@@ -195,6 +195,30 @@ function launchGame(root, manifest) {
 /** Only a cartridge plugged in while Compu-Cart runs starts its game by itself. */
 const autoPlays = (reason) => reason === "device";
 
+/** After verification and sync: play the intro and launch, or stop on "ready" and wait for the Play button. */
+const nextStateAfterSync = (reason) => (autoPlays(reason) ? "intro" : "ready");
+
+/**
+ * Latest console state, kept in the main process. The window may open (or
+ * reload) after a cartridge was already detected, so it asks for this snapshot
+ * instead of relying on having been listening at that exact moment.
+ * Logs are newest first, like in the window.
+ */
+class StateStore {
+  constructor(maxLogs = 60) {
+    this.maxLogs = maxLogs;
+    this.cart = { state: "empty" };
+    this.integrity = null;
+    this.sync = null;
+    this.logs = [];
+  }
+  setCart(cart) { this.cart = cart; }
+  setIntegrity(integrity) { this.integrity = integrity; }
+  setSync(sync) { this.sync = sync; }
+  addLog(entry) { this.logs = [entry, ...this.logs].slice(0, this.maxLogs); }
+  snapshot() { return { cart: this.cart, integrity: this.integrity, sync: this.sync, logs: this.logs }; }
+}
+
 /** "E:\\" -> "E". Only D..Z are cartridge letters. */
 function driveLetter(root) {
   const m = /^([D-Z]):\\?$/i.exec(String(root || ""));
@@ -236,4 +260,4 @@ function ejectDrive(root, { spawnImpl = spawn, scriptPath = path.join(__dirname,
   });
 }
 
-module.exports = { HotplugWatcher, WM_DEVICECHANGE, deviceEventKind, autoPlays, readManifest, verifyIntegrity, planSync, syncSaves, launchGame, safeCopy, driveLetter, parseEjectOutput, ejectCommand, ejectDrive };
+module.exports = { HotplugWatcher, WM_DEVICECHANGE, deviceEventKind, autoPlays, nextStateAfterSync, StateStore, readManifest, verifyIntegrity, planSync, syncSaves, launchGame, safeCopy, driveLetter, parseEjectOutput, ejectCommand, ejectDrive };

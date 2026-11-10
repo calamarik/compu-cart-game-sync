@@ -1,4 +1,4 @@
-COMPU-CART 1.1 — WINDOWS x64 — GUIDE D'INSTALLATION ET D'UTILISATION
+COMPU-CART 1.2 — WINDOWS x64 — GUIDE D'INSTALLATION ET D'UTILISATION
 =====================================================================
 
 1. INSTALLATION
@@ -7,7 +7,7 @@ Configuration : Windows 10 ou Windows 11, processeur Intel/AMD 64 bits.
 Pas besoin de Node.js, d'Electron, d'un compte, d'Internet ni des droits
 administrateur : l'installation se fait pour votre compte Windows.
 
-1) Double-cliquez sur Compu-Cart-Setup-1.1.0.exe.
+1) Double-cliquez sur Compu-Cart-Setup-1.2.0.exe.
 2) Choisissez les options :
    - « Démarrer avec Windows (en arrière-plan) » : coché par défaut.
      Compu-Cart s'ouvre discrètement à chaque ouverture de session et attend
@@ -36,8 +36,8 @@ sauvegardes (%APPDATA%\CompuCart) ne sont pas touchées.
 Compu-Cart vit dans la zone de notification (icône cartouche orange près de
 l'horloge ; cliquez sur la flèche ^ si elle est masquée).
 - Clic sur l'icône : afficher Compu-Cart.
-- Clic droit : Afficher, Éjecter la cartouche, Démarrer avec Windows
-  (activer/désactiver), Quitter.
+- Clic droit : Afficher, Jouer (quand une cartouche est prête), Éjecter la
+  cartouche, Démarrer avec Windows (activer/désactiver), Quitter.
 - Le bouton « Réduire » de l'écran Compu-Cart le renvoie en arrière-plan.
   Fermer la fenêtre (Alt+F4) fait de même ; pour l'arrêter complètement,
   utilisez « Quitter ».
@@ -46,6 +46,18 @@ Détection : Compu-Cart n'interroge plus les lecteurs en boucle. Il attend le
 signal que Windows envoie lorsqu'une clé USB est branchée ou retirée, puis
 vérifie les lecteurs D: à Z: quelques fois pendant 4 secondes. Le reste du
 temps, il ne consomme pratiquement rien.
+
+Cartouche déjà branchée au démarrage : à l'ouverture de Compu-Cart (ou de
+votre session Windows), il cherche tout de suite une cartouche déjà présente,
+puis encore après 2, 6 et 15 secondes, le temps que Windows reconnaisse la clé.
+Dans ce cas, Compu-Cart vérifie et synchronise la cartouche mais ne lance PAS
+le jeu tout seul : elle passe sur « Prête ». Si Compu-Cart est en arrière-plan,
+une bulle « Cartouche prête » apparaît près de l'horloge ; cliquez dessus pour
+afficher Compu-Cart. Le bouton « ▶ Jouer » (écran ou menu de l'icône) lance
+alors l'intro puis le jeu.
+Seule une cartouche branchée pendant que Compu-Cart tourne lance son jeu
+automatiquement. Le bouton « ▶ Jouer » sert aussi à relancer le jeu après
+l'avoir quitté.
 
 Plein écran : dès qu'une cartouche est branchée, Compu-Cart passe en plein
 écran sans bordure et masque le Bureau. Pendant le jeu, il reste en fond noir
@@ -106,7 +118,8 @@ Pour vérifier aussi les données du jeu, ajoutez leurs chemins et empreintes
 Pour une intro personnalisée, remplacez intro:{} dans le manifeste par :
   "intro": { "image": "intro.png", "audio": "jingle.mp3" }
 Utilisez une image PNG et un son MP3. Sans ces fichiers, l'intro Compu-Cart
-et son jingle sont joués. Le jeu est lancé automatiquement après 3,2 secondes.
+et son jingle sont joués. Le jeu est lancé automatiquement après 3,2 secondes
+(au branchement, ou quand vous cliquez sur « ▶ Jouer »).
 Les chemins sont relatifs à la clé ; les liens et chemins sortant du support
 ne sont pas autorisés. Les SHA-256 détectent les modifications, mais ne
 prouvent pas qu'un jeu est sûr : ils ne remplacent pas un antivirus.
@@ -133,6 +146,10 @@ caractères hexadécimaux (marqueur du modèle non remplacé, espace en trop…)
 « Intégrité compromise » : un fichier ne correspond plus à son empreinte.
 Rien ne se passe au branchement : vérifiez que compucart.json est à la racine
 de la clé et que Compu-Cart tourne (icône près de l'horloge).
+La cartouche est branchée mais le jeu ne démarre pas : si elle était déjà là au
+démarrage de Compu-Cart, c'est normal. Cliquez sur « ▶ Jouer ». Si l'état
+« Prête » n'apparaît pas, ouvrez Compu-Cart depuis l'icône : le Journal indique
+ce qui a été détecté.
 Le jeu s'ouvre derrière Compu-Cart : cliquez sur le jeu dans la barre des
 tâches (Alt+Tab).
 
@@ -147,4 +164,7 @@ Les règles de détection, d'éjection et de synchronisation ont passé leurs
 tests automatiques, et le code d'éjection Windows a été compilé sans erreur.
 Le programme Windows, le branchement USB réel, l'éjection réelle et le
 lancement d'un vrai jeu n'ont pas pu être essayés sur un ordinateur Windows
-dans cet environnement de fabrication.
+dans cet environnement de fabrication. C'est aussi le cas de la version 1.2 :
+la détection d'une cartouche déjà branchée au démarrage, l'état « Prête », le
+bouton « Jouer » et la bulle de notification n'ont été validés que par des
+tests automatiques (détection simulée, règles de démarrage, état de la console).

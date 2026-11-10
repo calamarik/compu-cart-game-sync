@@ -33,8 +33,16 @@ function run() {
   const startHidden = process.argv.includes("--background");
   const icon = path.join(__dirname, "assets", process.platform === "win32" ? "icon.ico" : "icon.png");
 
+  const store = new core.StateStore();
   const alive = () => win && !win.isDestroyed();
-  const send = (ch, data) => alive() && win.webContents.send(ch, data);
+  // Every update is also kept in the store, so a window that opens after a detection can ask for it (cc:state).
+  const send = (ch, data) => {
+    if (ch === "cc:cart") store.setCart(data);
+    else if (ch === "cc:integrity") store.setIntegrity(data);
+    else if (ch === "cc:sync") store.setSync(data);
+    else if (ch === "cc:log") store.addLog(data);
+    return alive() && win.webContents.send(ch, data);
+  };
   const log = (level, msg) => send("cc:log", { level, msg, at: Date.now() });
   const setCart = (data) => { send("cc:cart", data); refreshTray(); };
 
@@ -59,6 +67,13 @@ function run() {
   }
 
   const canEject = () => currentCart && !launching && !currentCart.ejecting && ["ready", "intro", "corrupt", "error"].includes(currentCart.state);
+  const canPlay = () => currentCart && !launching && !currentCart.ejecting && currentCart.state === "ready";
+
+  /** Windows balloon when a cartridge found at startup is ready while the console is hidden (background start). */
+  function notifyReady(manifest) {
+    if (process.platform !== "win32" || !tray || (alive() && win.isVisible())) return;
+    tray.displayBalloon({ title: "Cartouche prête", content: `${manifest.title} est prête. Cliquez ici, puis sur « Jouer ».`, iconType: "info" });
+  }
 
   function refreshTray() {
     if (!tray) return;
@@ -66,6 +81,7 @@ function run() {
     tray.setToolTip(currentCart ? `Compu-Cart — ${currentCart.title || currentCart.root}` : "Compu-Cart — en attente de cartouche");
     tray.setContextMenu(Menu.buildFromTemplate([
       { label: "Afficher Compu-Cart", click: showConsole },
+      { label: currentCart?.title ? `▶ Jouer à ${currentCart.title}` : "▶ Jouer", enabled: !!canPlay(), click: () => playCurrent() },
       { label: currentCart ? `Éjecter la cartouche (${currentCart.root})` : "Éjecter la cartouche", enabled: !!canEject(), click: () => ejectCurrent() },
       { type: "separator" },
       { label: "Démarrer avec Windows", type: "checkbox", checked: autostartEnabled(), click: (item) => { setAutostart(item.checked); refreshTray(); } },
@@ -74,15 +90,28 @@ function run() {
     ]));
   }
 
-  async function handleInsert(root) {
+  /** Intro image and sound of the cartridge as data URLs (null when absent). */
+  function introPayload(root, manifest) {
+    const asset = (rel, mime) => {
+      if (!rel) return null;
+      const f = path.join(root, rel);
+      return fs.existsSync(f) ? `data:${mime};base64,${fs.readFileSync(f).toString("base64")}` : null;
+    };
+    return { image: asset(manifest.intro?.image, "image/png"), audio: asset(manifest.intro?.audio, "audio/mpeg") };
+  }
+
+  /** reason "startup": cartridge already there at launch (stops on "Prête"); "device": plugged while running (intro, then the game starts by itself). */
+  async function handleInsert(root, reason = "device") {
     if (currentCart) { log("warn", `Une cartouche est déjà active — ${root} ignoré`); return; }
     const cart = { root, state: "verifying" };
     currentCart = cart;
-    if (!win.isVisible()) { autoShown = true; showConsole(); }
+    // Only a plug-in event brings the console to the front by itself; a cartridge found at launch must not take over the screen.
+    if (core.autoPlays(reason) && !win.isVisible()) { autoShown = true; showConsole(); }
     try {
-      log("info", `Cartouche détectée sur ${root}`);
+      log("info", core.autoPlays(reason) ? `Cartouche détectée sur ${root}` : `Cartouche déjà présente sur ${root}`);
       const manifest = await core.readManifest(root);
       cart.title = manifest.title;
+      cart.manifest = manifest;
       setCart({ state: "verifying", root, manifest });
       const integrity = await core.verifyIntegrity(root, manifest);
       if (currentCart !== cart) return;
@@ -99,13 +128,15 @@ function run() {
       if (currentCart !== cart) return;
       send("cc:sync", sync);
       log("ok", `Sauvegardes synchronisées (${sync.plan.filter((p) => p.action !== "skip").length} fichier(s))`);
-      const asset = (rel, mime) => {
-        if (!rel) return null;
-        const f = path.join(root, rel);
-        return fs.existsSync(f) ? `data:${mime};base64,${fs.readFileSync(f).toString("base64")}` : null;
-      };
+      if (core.nextStateAfterSync(reason) === "ready") {
+        cart.state = "ready";
+        setCart({ state: "ready", root, manifest });
+        log("ok", "Cartouche prête — cliquez sur « Jouer » pour lancer le jeu");
+        notifyReady(manifest);
+        return;
+      }
       cart.state = "intro";
-      setCart({ state: "intro", root, manifest, intro: { image: asset(manifest.intro.image, "image/png"), audio: asset(manifest.intro.audio, "audio/mpeg") } });
+      setCart({ state: "intro", root, manifest, intro: introPayload(root, manifest) });
     } catch (e) {
       if (currentCart !== cart) return;
       log("error", e.message);
@@ -144,6 +175,22 @@ function run() {
     if (currentCart === cart) { cart.ejecting = false; cart.state = previous; setCart({ state: previous, root: cart.root }); }
   }
 
+  /** "Jouer" (window button, tray menu): same path as an automatic start: intro, then cc:launch re-checks integrity and starts the game. */
+  function playCurrent() {
+    const cart = currentCart;
+    if (!canPlay() || !cart.manifest) { log("warn", launching ? "Un jeu est déjà en cours" : "Aucune cartouche prête à jouer"); return; }
+    try {
+      const intro = introPayload(cart.root, cart.manifest);
+      showConsole();
+      cart.state = "intro";
+      setCart({ state: "intro", root: cart.root, manifest: cart.manifest, intro });
+    } catch (e) {
+      log("error", e.message);
+    }
+  }
+
+  ipcMain.handle("cc:play", () => playCurrent());
+  ipcMain.handle("cc:state", () => store.snapshot());
   ipcMain.handle("cc:launch", async (_e, root) => {
     const cart = currentCart;
     if (!cart || cart.root !== root || cart.state !== "intro" || launching) return;
@@ -204,6 +251,7 @@ function run() {
     tray = new Tray(nativeImage.createFromPath(icon));
     tray.on("click", showConsole);
     tray.on("double-click", showConsole);
+    tray.on("balloon-click", showConsole);
     refreshTray();
 
     if (process.platform === "win32") {

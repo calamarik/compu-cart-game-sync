@@ -51,17 +51,51 @@ describe("Event-driven detection", () => {
     expect(core.deviceEventKind(0x0007)).toBe("change");
     expect(core.deviceEventKind(0x0018)).toBeNull();
   });
-  it("does not poll on its own: scans only at start and after a device event", () => {
+  it("does not poll on its own: scans at launch (now, 2 s, 6 s, 15 s) and after a device event only", () => {
     vi.useFakeTimers();
     let checks = 0;
     const w = new core.HotplugWatcher({ letters: "E", exists: () => { checks++; return false; } });
     w.start();
     expect(checks).toBe(1);
     vi.advanceTimersByTime(60000);
-    expect(checks).toBe(1);
+    expect(checks).toBe(4);
+    vi.advanceTimersByTime(60000);
+    expect(checks).toBe(4);
     w.notify("arrival");
     vi.advanceTimersByTime(5000);
-    expect(checks).toBe(4);
+    expect(checks).toBe(7);
+    w.stop();
+    vi.useRealTimers();
+  });
+  it("reports a cartridge already present at launch as startup, and a plugged one as device", () => {
+    vi.useFakeTimers();
+    let present = true;
+    const w = new core.HotplugWatcher({ letters: "E", exists: () => present });
+    const reasons: string[] = [];
+    w.on("inserted", (_root: string, reason: string) => reasons.push(reason));
+    w.on("removed", () => reasons.push("removed"));
+    w.start();
+    expect(reasons).toEqual(["startup"]);
+    vi.advanceTimersByTime(20000); // the later launch scans must not report it again
+    expect(reasons).toEqual(["startup"]);
+    present = false; w.notify("removal"); vi.advanceTimersByTime(5000);
+    present = true; w.notify("arrival"); vi.advanceTimersByTime(5000);
+    expect(reasons).toEqual(["startup", "removed", "device"]);
+    w.stop();
+    vi.useRealTimers();
+  });
+  it("finds a cartridge that Windows only mounts a few seconds after launch, still as startup", () => {
+    vi.useFakeTimers();
+    let present = false;
+    const w = new core.HotplugWatcher({ letters: "E", exists: () => present });
+    const reasons: string[] = [];
+    w.on("inserted", (_root: string, reason: string) => reasons.push(reason));
+    w.start();
+    expect(reasons).toEqual([]);
+    vi.advanceTimersByTime(3000);
+    present = true;
+    vi.advanceTimersByTime(4000); // the 6 s scan
+    expect(reasons).toEqual(["startup"]);
     w.stop();
     vi.useRealTimers();
   });
@@ -81,6 +115,37 @@ describe("Event-driven detection", () => {
     expect(touched).toEqual([]);
     t = 5000; w.notify("arrival"); w.stop(); w.scan();
     expect(inserted).toEqual(["E:\\", "E:\\"]);
+  });
+});
+
+describe("Ready or auto-play", () => {
+  it("starts the game by itself only for a cartridge plugged in while running", () => {
+    expect(core.autoPlays("device")).toBe(true);
+    expect(core.autoPlays("startup")).toBe(false);
+    expect(core.autoPlays("manual")).toBe(false);
+    expect(core.nextStateAfterSync("device")).toBe("intro");
+    expect(core.nextStateAfterSync("startup")).toBe("ready");
+    expect(core.nextStateAfterSync("manual")).toBe("ready");
+  });
+});
+
+describe("Console state kept for a late window", () => {
+  it("starts empty", () => {
+    expect(new core.StateStore().snapshot()).toEqual({ cart: { state: "empty" }, integrity: null, sync: null, logs: [] });
+  });
+  it("returns the latest cartridge, integrity and sync, with logs newest first and capped", () => {
+    const s = new core.StateStore(3);
+    s.setCart({ state: "ready", root: "E:\\" });
+    s.setIntegrity({ ok: true, results: [] });
+    s.setSync({ plan: [] });
+    ["a", "b", "c", "d"].forEach((msg, at) => s.addLog({ level: "info", msg, at }));
+    const snap = s.snapshot();
+    expect(snap.cart).toEqual({ state: "ready", root: "E:\\" });
+    expect(snap.integrity).toEqual({ ok: true, results: [] });
+    expect(snap.sync).toEqual({ plan: [] });
+    expect(snap.logs.map((l: { msg: string }) => l.msg)).toEqual(["d", "c", "b"]);
+    s.setCart({ state: "empty" }); s.setIntegrity(null); s.setSync(null);
+    expect(s.snapshot()).toMatchObject({ cart: { state: "empty" }, integrity: null, sync: null });
   });
 });
 
