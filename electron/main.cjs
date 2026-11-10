@@ -124,12 +124,11 @@ function run() {
     log("info", `Éjection de ${cart.root} : écriture des données en attente…`);
     try {
       const result = await core.ejectDrive(cart.root);
-      if (result.status === "removed" || result.status === "flushed") {
+      if (result.status === "removed") {
         watcher.suppress(cart.root);
         currentCart = null;
         send("cc:integrity", null); send("cc:sync", null);
-        if (result.status === "removed") log("ok", "Cartouche éjectée : vous pouvez la retirer en toute sécurité");
-        else log("warn", `${result.detail} Vous pouvez la retirer si aucun autre programme ne l'utilise.`);
+        log("ok", "Cartouche éjectée par Windows : vous pouvez la retirer en toute sécurité");
         setCart({ state: "ejected", root: cart.root });
         setTimeout(() => {
           if (currentCart) return;

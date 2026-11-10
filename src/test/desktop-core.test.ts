@@ -93,7 +93,7 @@ describe("Safe eject", () => {
   it("reports safe removal only when Windows disconnected the device", () => {
     expect(core.parseEjectOutput("noise\r\nOK\r\n").status).toBe("removed");
     expect(core.parseEjectOutput("BUSY").status).toBe("busy");
-    expect(core.parseEjectOutput("VETO:6:USB\\VID_1234").status).toBe("flushed");
+    expect(core.parseEjectOutput("VETO:6:USB\\VID_1234").status).toBe("vetoed");
     expect(core.parseEjectOutput("ERR:Accès refusé")).toEqual({ status: "error", detail: "Accès refusé" });
     expect(core.parseEjectOutput("").status).toBe("error");
   });

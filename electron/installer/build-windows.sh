@@ -2,7 +2,7 @@
 # Builds the Compu-Cart Windows x64 installer (Compu-Cart-Setup-<version>.exe) from Linux.
 # Needs: bun, node/npm, nix (for makensis). Tools are installed in $WORK, never in the project.
 set -euo pipefail
-VERSION="${VERSION:-1.1.0}"
+VERSION="${VERSION:-1.1.1}"
 PROJECT="$(cd "$(dirname "$0")/../.." && pwd)"
 WORK="${WORK:-/tmp/ccbuild}"
 STAGE="$WORK/stage"

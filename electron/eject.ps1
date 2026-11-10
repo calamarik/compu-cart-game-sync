@@ -15,6 +15,8 @@ public static class CcEject {
   const uint FILE_SHARE_READ = 1, FILE_SHARE_WRITE = 2, OPEN_EXISTING = 3;
   const uint FSCTL_LOCK_VOLUME = 0x00090018, FSCTL_DISMOUNT_VOLUME = 0x00090020;
   const uint IOCTL_STORAGE_MEDIA_REMOVAL = 0x002D4804;
+  const uint IOCTL_STORAGE_EJECT_MEDIA = 0x002D4808;
+  const uint CM_DRP_CAPABILITIES = 0x10, CM_DEVCAP_REMOVABLE = 0x4;
   const uint IOCTL_STORAGE_GET_DEVICE_NUMBER = 0x002D1080;
   const uint DIGCF_PRESENT = 0x2, DIGCF_DEVICEINTERFACE = 0x10;
 
@@ -41,6 +43,10 @@ public static class CcEject {
   static extern bool SetupDiDestroyDeviceInfoList(IntPtr set);
   [DllImport("cfgmgr32.dll")]
   static extern int CM_Get_Parent(out uint parent, uint devInst, uint flags);
+  [DllImport("cfgmgr32.dll", EntryPoint = "CM_Get_DevNode_Registry_PropertyW")]
+  static extern int CM_Get_DevNode_Registry_Property(uint devInst, uint prop, out uint regType, out uint value, ref uint size, uint flags);
+  [DllImport("kernel32.dll", CharSet = CharSet.Unicode)]
+  static extern uint GetDriveType(string root);
   [DllImport("cfgmgr32.dll", CharSet = CharSet.Unicode, EntryPoint = "CM_Request_Device_EjectW")]
   static extern int CM_Request_Device_Eject(uint devInst, out int vetoType, StringBuilder vetoName, int nameLength, uint flags);
 
@@ -86,6 +92,29 @@ public static class CcEject {
     } finally { SetupDiDestroyDeviceInfoList(set); }
   }
 
+  static bool Removable(uint inst) {
+    uint t, v = 0, size = 4;
+    return CM_Get_DevNode_Registry_Property(inst, CM_DRP_CAPABILITIES, out t, out v, ref size, 0) == 0 && (v & CM_DEVCAP_REMOVABLE) != 0;
+  }
+
+  // Same target as "Retirer le périphérique en toute sécurité": the nearest removable ancestor (USB device).
+  static uint RemovableAncestor(uint inst) {
+    uint cur = inst;
+    for (int i = 0; i < 8; i++) {
+      if (Removable(cur)) return cur;
+      uint parent;
+      if (CM_Get_Parent(out parent, cur, 0) != 0) break;
+      cur = parent;
+    }
+    return 0;
+  }
+
+  static bool DriveGone(string letter) {
+    // 1 = DRIVE_NO_ROOT_DIR: the letter no longer exists in Windows.
+    for (int i = 0; i < 20; i++) { if (GetDriveType(letter + ":\\") == 1) return true; Thread.Sleep(250); }
+    return false;
+  }
+
   public static string Eject(string letter) {
     string volume = "\\\\.\\" + letter + ":";
     uint number, type;
@@ -109,19 +138,26 @@ public static class CcEject {
       IntPtr allow = Marshal.AllocHGlobal(1);
       try { Marshal.WriteByte(allow, 0); DeviceIoControl(h, IOCTL_STORAGE_MEDIA_REMOVAL, allow, 1, IntPtr.Zero, 0, out ret, IntPtr.Zero); }
       finally { Marshal.FreeHGlobal(allow); }
+      DeviceIoControl(h, IOCTL_STORAGE_EJECT_MEDIA, IntPtr.Zero, 0, IntPtr.Zero, 0, out ret, IntPtr.Zero);
     }
     // 2) Ask Windows to remove the device (same as "Retirer le périphérique en toute sécurité").
     uint diskInst = FindDiskDevInst(number);
     if (diskInst == 0) return "VETO:0:périphérique introuvable";
+    uint removable = RemovableAncestor(diskInst);
     uint parent;
-    uint[] targets = CM_Get_Parent(out parent, diskInst, 0) == 0 ? new uint[] { parent, diskInst } : new uint[] { diskInst };
+    uint[] targets = removable != 0 ? new uint[] { removable, diskInst }
+      : (CM_Get_Parent(out parent, diskInst, 0) == 0 ? new uint[] { parent, diskInst } : new uint[] { diskInst });
     int vetoType = 0;
     string vetoName = "";
     for (int attempt = 0; attempt < 3; attempt++) {
       foreach (uint target in targets) {
         StringBuilder sb = new StringBuilder(260);
         int cr = CM_Request_Device_Eject(target, out vetoType, sb, sb.Capacity, 0);
-        if (cr == 0 && vetoType == 0) return "OK";
+        if (cr == 0 && vetoType == 0) {
+          if (DriveGone(letter)) return "OK";
+          vetoName = "le lecteur est toujours visible dans Windows";
+          continue;
+        }
         vetoName = sb.ToString();
       }
       Thread.Sleep(500);
