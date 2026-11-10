@@ -93,6 +93,15 @@ function run() {
     }
   }
 
+  /** "Lancement automatique" (tray checkbox or console toggle): on = a plugged cartridge starts its game by itself; off = it stops on "Prête". */
+  function setAutoLaunch(on) {
+    settings = { ...settings, autoLaunch: !!on };
+    try { core.writeSettings(settingsFile(), settings); } catch (e) { log("warn", `Option non enregistrée : ${e.message}`); }
+    log("info", on ? "Lancement automatique activé : la cartouche branchée lance son jeu" : "Lancement automatique désactivé : appuyez sur « Jouer » ou Entrée");
+    send("cc:settings", { autoLaunch: settings.autoLaunch !== false });
+    refreshTray();
+  }
+
   /** Tray checkbox: saves the choice, then turns the Windows AutoPlay setting off or back to what it was. */
   function setAutoplayOption(on) {
     const r = on ? autoplay.enable() : autoplay.restore();
@@ -112,6 +121,7 @@ function run() {
       { label: currentCart ? `Éjecter la cartouche (${currentCart.root})` : "Éjecter la cartouche", enabled: !!canEject(), click: () => ejectCurrent() },
       { type: "separator" },
       { label: "Démarrer avec Windows", type: "checkbox", checked: autostartEnabled(), click: (item) => { setAutostart(item.checked); refreshTray(); } },
+      { label: "Lancer le jeu automatiquement au branchement", type: "checkbox", checked: settings.autoLaunch !== false, click: (item) => setAutoLaunch(item.checked) },
       ...(process.platform === "win32" ? [{ label: "Désactiver l'exécution automatique de Windows pendant que Compu-Cart tourne", type: "checkbox", checked: !!settings.disableAutoplay, click: (item) => setAutoplayOption(item.checked) }] : []),
       { type: "separator" },
       { label: running ? "Quitter (jeu en cours…)" : "Quitter", enabled: !running, click: () => { quitting = true; app.quit(); } },
@@ -134,9 +144,9 @@ function run() {
     const cart = { root, state: "verifying" };
     currentCart = cart;
     // Only a plug-in event brings the console to the front by itself; a cartridge found at launch must not take over the screen.
-    if (core.autoPlays(reason) && !win.isVisible()) { autoShown = true; showConsole(); }
+    if (reason === "device" && !win.isVisible()) { autoShown = true; showConsole(); }
     try {
-      log("info", core.autoPlays(reason) ? `Cartouche détectée sur ${root}` : `Cartouche déjà présente sur ${root}`);
+      log("info", reason === "device" ? `Cartouche détectée sur ${root}` : `Cartouche déjà présente sur ${root}`);
       const manifest = await core.readManifest(root);
       cart.title = manifest.title;
       cart.manifest = manifest;
@@ -156,10 +166,12 @@ function run() {
       if (currentCart !== cart) return;
       send("cc:sync", sync);
       log("ok", `Sauvegardes synchronisées (${sync.plan.filter((p) => p.action !== "skip").length} fichier(s))`);
-      if (core.nextStateAfterSync(reason) === "ready") {
+      if (core.nextStateAfterSync(reason, settings.autoLaunch) === "ready") {
+        // Plugged in with auto launch off: show the console (the Play button or Enter starts the game). Found at launch: stay quiet.
+        if (reason === "device") showConsole();
         cart.state = "ready";
         setCart({ state: "ready", root, manifest });
-        log("ok", "Cartouche prête — cliquez sur « Jouer » pour lancer le jeu");
+        log("ok", "Cartouche prête — cliquez sur « Jouer » (ou appuyez sur Entrée) pour lancer le jeu");
         notifyReady(manifest);
         return;
       }
@@ -220,6 +232,8 @@ function run() {
     }
   }
 
+  ipcMain.handle("cc:settings", () => ({ autoLaunch: settings.autoLaunch !== false }));
+  ipcMain.handle("cc:setAutoLaunch", (_e, on) => setAutoLaunch(!!on));
   ipcMain.handle("cc:play", () => playCurrent());
   ipcMain.handle("cc:state", () => store.snapshot());
   ipcMain.handle("cc:launch", async (_e, root) => {

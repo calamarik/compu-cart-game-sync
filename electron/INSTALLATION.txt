@@ -74,7 +74,13 @@ une bulle « Cartouche prête » apparaît près de l'horloge ; cliquez dessus p
 afficher Compu-Cart. Le bouton « ▶ Jouer » (écran ou menu de l'icône) lance
 alors l'intro puis le jeu.
 Seule une cartouche branchée pendant que Compu-Cart tourne lance son jeu
-automatiquement. Le bouton « ▶ Jouer » sert aussi à relancer le jeu après
+automatiquement, tant que le « Lancement auto » est sur ON.
+Lancement auto : le bouton « Lancement auto : ON/OFF » de l'écran (ou la case
+« Lancer le jeu automatiquement au branchement » du menu de l'icône) règle ce
+comportement, ON par défaut. Sur OFF, comme sur une console à l'ancienne, une
+cartouche branchée est vérifiée et synchronisée puis s'arrête sur « Prête » :
+le bouton « ▶ Jouer » (écran ou menu de l'icône) ou la touche Entrée lance
+l'intro puis le jeu. Le choix est mémorisé. Le bouton « ▶ Jouer » sert aussi à relancer le jeu après
 l'avoir quitté.
 
 Plein écran : dès qu'une cartouche est branchée, Compu-Cart passe en plein

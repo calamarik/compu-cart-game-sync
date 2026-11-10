@@ -193,10 +193,10 @@ function launchGame(root, manifest) {
 }
 
 /** Only a cartridge plugged in while Compu-Cart runs starts its game by itself. */
-const autoPlays = (reason) => reason === "device";
+const autoPlays = (reason, autoLaunch = true) => reason === "device" && autoLaunch !== false;
 
 /** After verification and sync: play the intro and launch, or stop on "ready" and wait for the Play button. */
-const nextStateAfterSync = (reason) => (autoPlays(reason) ? "intro" : "ready");
+const nextStateAfterSync = (reason, autoLaunch = true) => (autoPlays(reason, autoLaunch) ? "intro" : "ready");
 
 /**
  * Latest console state, kept in the main process. The window may open (or
@@ -261,7 +261,7 @@ function ejectDrive(root, { spawnImpl = spawn, scriptPath = path.join(__dirname,
 }
 
 /** Compu-Cart's own options (userData/settings.json). Unknown or unreadable file: defaults. */
-const DEFAULT_SETTINGS = { disableAutoplay: false };
+const DEFAULT_SETTINGS = { disableAutoplay: false, autoLaunch: true };
 function readSettings(file) {
   try { return { ...DEFAULT_SETTINGS, ...JSON.parse(fs.readFileSync(file, "utf8")) }; } catch { return { ...DEFAULT_SETTINGS }; }
 }

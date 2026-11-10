@@ -26,6 +26,8 @@ type Bridge = {
   on: (ch: string, cb: (d: any) => void) => (() => void) | void;
   launch: (root: string) => Promise<void>;
   play?: () => Promise<void>;
+  settings?: () => Promise<{ autoLaunch: boolean }>;
+  setAutoLaunch?: (on: boolean) => Promise<void>;
   state?: () => Promise<Snapshot>;
   eject?: () => Promise<void>;
   hide?: () => Promise<void>;
@@ -57,6 +59,7 @@ export function Index() {
   const [integrity, setIntegrity] = useState<Integrity | null>(null);
   const [sync, setSync] = useState<{ localDir: string; cartDir: string; plan: SyncItem[] } | null>(null);
   const [bridge, setBridge] = useState<Bridge | null>(null);
+  const [autoLaunch, setAutoLaunch] = useState(true);
   const timers = useRef<number[]>([]);
   const announced = useRef(false);
   const log =(level: Log["level"], msg: string) => setLogs((l) => [{ level, msg, at: Date.now() }, ...l].slice(0, 60));
@@ -71,8 +74,10 @@ export function Index() {
       b.on("cart", setCart),
       b.on("integrity", setIntegrity),
       b.on("sync", setSync),
+      b.on("settings", (d) => setAutoLaunch(d.autoLaunch !== false)), // also changed from the tray menu
     ];
     let active = true;
+    b.settings?.().then((s) => { if (s && active) setAutoLaunch(s.autoLaunch !== false); }).catch(() => {});
     if (!announced.current) {
       announced.current = true;
       log("ok", "Pont matériel connecté — en attente d'un branchement (détection par événements Windows)");
@@ -153,6 +158,24 @@ export function Index() {
     if (bridge?.play) { bridge.play(); return; }
     setCart((c) => ({ ...c, state: "intro" })); // demo mode: same intro + simulated launch
   };
+  const toggleAutoLaunch = () => {
+    const next = !autoLaunch;
+    setAutoLaunch(next);
+    bridge?.setAutoLaunch?.(next);
+  };
+
+  // Enter or Space starts the game of a ready cartridge (like pressing ON); ignored while a button or field has the focus.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if ((e.key !== "Enter" && e.key !== " ") || e.repeat || !canPlay) return;
+      const tag = (e.target as HTMLElement | null)?.tagName;
+      if (tag && ["INPUT", "TEXTAREA", "SELECT", "BUTTON", "A"].includes(tag)) return;
+      e.preventDefault();
+      play();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  });
 
   const activeIdx = STEPS.findIndex((s) => s.key.includes(cart.state));
   const levelCls = { info: "text-muted-foreground", ok: "text-success", warn: "text-warn", error: "text-destructive" };
@@ -170,6 +193,7 @@ export function Index() {
             <button onClick={() => simulate(true)} className="rounded-sm border border-destructive px-4 py-2 text-sm text-destructive hover:bg-destructive/10">Cartouche corrompue</button>
           </>)}
           <button onClick={eject} disabled={!canEject} title={canEject ? "Écrit les données puis déconnecte la cartouche" : "Disponible quand aucun jeu ni synchronisation n'est en cours"} className="rounded-sm border border-primary px-4 py-2 text-sm text-primary hover:bg-primary/10 disabled:cursor-not-allowed disabled:border-border disabled:text-muted-foreground disabled:hover:bg-transparent">⏏ Éjecter</button>
+          {bridge?.setAutoLaunch && <button onClick={toggleAutoLaunch} aria-pressed={autoLaunch} title={autoLaunch ? "Une cartouche branchée lance son jeu toute seule. Cliquez pour passer en lancement manuel (bouton Jouer ou Entrée)." : "Une cartouche branchée s'arrête sur « Prête ». Cliquez pour que le jeu se lance tout seul au branchement."} className="rounded-sm border px-4 py-2 text-sm hover:bg-secondary">Lancement auto : {autoLaunch ? "ON" : "OFF"}</button>}
           {bridge?.hide && <button onClick={() => bridge.hide?.()} className="rounded-sm border px-4 py-2 text-sm hover:bg-secondary">Réduire</button>}
           {bridge?.quit && <button onClick={() => bridge.quit?.()} className="rounded-sm border px-4 py-2 text-sm text-muted-foreground hover:bg-secondary">Quitter</button>}
         </div>
@@ -191,6 +215,7 @@ export function Index() {
               <p className="font-display text-sm">{cart.state === "ejected" ? "CARTOUCHE ÉJECTÉE" : cart.manifest?.title ?? "INSÉREZ UNE CARTOUCHE"}</p>
               <p className="mt-2 text-xs text-muted-foreground">{cart.root ? [cart.root, cart.manifest?.executable].filter(Boolean).join(" · ") : "En attente d'un branchement…"}</p>
               {canPlay && <button onClick={play} className="mt-4 rounded-sm bg-primary px-5 py-2 text-sm font-bold text-primary-foreground hover:opacity-90">▶ Jouer</button>}
+              {canPlay && <p className="mt-2 text-xs text-muted-foreground">ou appuyez sur Entrée</p>}
             </div>
             <span className="ml-auto rounded-sm bg-secondary px-3 py-1 text-xs uppercase tracking-widest text-primary">{cart.state === "ready" ? "prête" : cart.state}</span>
           </div>

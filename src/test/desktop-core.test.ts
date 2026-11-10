@@ -127,6 +127,17 @@ describe("Ready or auto-play", () => {
     expect(core.nextStateAfterSync("startup")).toBe("ready");
     expect(core.nextStateAfterSync("manual")).toBe("ready");
   });
+  it("with auto launch off, a plugged cartridge stops on ready too (Play button or Enter starts it)", () => {
+    expect(core.autoPlays("device", false)).toBe(false);
+    expect(core.nextStateAfterSync("device", false)).toBe("ready");
+    expect(core.nextStateAfterSync("startup", false)).toBe("ready");
+  });
+  it("with auto launch on, or when the option is unknown, nothing changes", () => {
+    expect(core.autoPlays("device", true)).toBe(true);
+    expect(core.autoPlays("device", undefined)).toBe(true);
+    expect(core.nextStateAfterSync("device", true)).toBe("intro");
+    expect(core.autoPlays("startup", true)).toBe(false);
+  });
 });
 
 describe("Console state kept for a late window", () => {
@@ -178,11 +189,13 @@ describe("Windows AutoPlay option", () => {
     const dir = await mkdtemp(path.join(tmpdir(), "cc-settings-"));
     directories.push(dir);
     const file = path.join(dir, "settings.json");
-    expect(core.readSettings(file)).toEqual({ disableAutoplay: false });
-    core.writeSettings(file, { disableAutoplay: true });
-    expect(core.readSettings(file)).toEqual({ disableAutoplay: true });
+    expect(core.readSettings(file)).toEqual({ disableAutoplay: false, autoLaunch: true });
+    core.writeSettings(file, { disableAutoplay: true, autoLaunch: false });
+    expect(core.readSettings(file)).toEqual({ disableAutoplay: true, autoLaunch: false });
+    await writeFile(file, JSON.stringify({ disableAutoplay: true })); // file written before auto launch existed
+    expect(core.readSettings(file)).toEqual({ disableAutoplay: true, autoLaunch: true });
     await writeFile(file, "{ not json");
-    expect(core.readSettings(file)).toEqual({ disableAutoplay: false });
+    expect(core.readSettings(file)).toEqual({ disableAutoplay: false, autoLaunch: true });
   });
   it("turns AutoPlay off, then puts back the previous value (set to 0)", async () => {
     const { g, reg } = await guard(0);
