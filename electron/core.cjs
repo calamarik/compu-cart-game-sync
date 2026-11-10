@@ -21,44 +21,58 @@ const deviceEventKind = (wParam) => DBT[wParam] || null;
  * (and remounts) a dismounted volume.
  */
 class HotplugWatcher extends EventEmitter {
-  constructor({ pollMs = 0, letters = "DEFGHIJKLMNOPQRSTUVWXYZ", exists, now = Date.now, rescanDelays = [300, 1500, 4000] } = {}) {
+  constructor({ pollMs = 0, letters = "DEFGHIJKLMNOPQRSTUVWXYZ", exists, now = Date.now, rescanDelays = [300, 1500, 4000], startupDelays = [2000, 6000, 15000] } = {}) {
     super();
     this.pollMs = pollMs;
     this.letters = letters;
     this.exists = exists || ((root) => fs.existsSync(path.join(root, MANIFEST)));
     this.now = now;
     this.rescanDelays = rescanDelays;
+    this.startupDelays = startupDelays;
     this.known = new Set();
     this.suppressed = new Map();
     this.pending = [];
+    this.startupTimers = [];
   }
+  /**
+   * Forced detection at launch: scans now, then a few more times (Windows may
+   * still be mounting USB drives at logon). Cartridges found this way are
+   * reported with reason "startup" so the game is not launched automatically.
+   */
   start() {
-    if (this.pollMs) this.timer = setInterval(() => this.scan(), this.pollMs);
-    this.scan();
+    if (this.pollMs) this.timer = setInterval(() => this.scan("device"), this.pollMs);
+    this.scan("startup");
+    this.startupTimers = this.startupDelays.map((ms) => setTimeout(() => this.scan("startup"), ms));
   }
   stop() {
     clearInterval(this.timer);
-    this.pending.forEach(clearTimeout);
+    [...this.pending, ...this.startupTimers].forEach(clearTimeout);
     this.pending = [];
+    this.startupTimers = [];
   }
+  /** A Windows device event: the drive was just plugged (reason "device"). */
   notify(kind) {
     if (kind === "arrival") for (const [root, at] of this.suppressed) if (this.now() - at > 2000) this.suppressed.delete(root);
     this.pending.forEach(clearTimeout);
-    this.pending = this.rescanDelays.map((ms) => setTimeout(() => this.scan(), ms));
+    this.pending = this.rescanDelays.map((ms) => setTimeout(() => this.scan("device"), ms));
+  }
+  /** One-off scan outside a plug event (resume from sleep, "Rechercher" button). */
+  rescan(reason = "manual") {
+    this.scan(reason);
   }
   /** Forget a root after a safe eject; it is ignored until a new arrival event. */
   suppress(root) {
     this.known.delete(root);
     this.suppressed.set(root, this.now());
   }
-  scan() {
+  scan(reason = "device") {
     const now = new Set();
     for (const l of this.letters) {
       const root = `${l}:\\`;
       if (this.suppressed.has(root)) continue;
       if (this.exists(root)) now.add(root);
     }
-    for (const r of now) if (!this.known.has(r)) this.emit("inserted", r);
+    for (const r of now) if (!this.known.has(r)) this.emit("inserted", r, reason);
     for (const r of this.known) if (!now.has(r)) this.emit("removed", r);
     this.known = now;
   }
@@ -178,6 +192,9 @@ function launchGame(root, manifest) {
   });
 }
 
+/** Only a cartridge plugged in while Compu-Cart runs starts its game by itself. */
+const autoPlays = (reason) => reason === "device";
+
 /** "E:\\" -> "E". Only D..Z are cartridge letters. */
 function driveLetter(root) {
   const m = /^([D-Z]):\\?$/i.exec(String(root || ""));
@@ -219,4 +236,4 @@ function ejectDrive(root, { spawnImpl = spawn, scriptPath = path.join(__dirname,
   });
 }
 
-module.exports = { HotplugWatcher, WM_DEVICECHANGE, deviceEventKind, readManifest, verifyIntegrity, planSync, syncSaves, launchGame, safeCopy, driveLetter, parseEjectOutput, ejectCommand, ejectDrive };
+module.exports = { HotplugWatcher, WM_DEVICECHANGE, deviceEventKind, autoPlays, readManifest, verifyIntegrity, planSync, syncSaves, launchGame, safeCopy, driveLetter, parseEjectOutput, ejectCommand, ejectDrive };
