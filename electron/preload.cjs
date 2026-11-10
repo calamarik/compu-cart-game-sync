@@ -8,7 +8,6 @@ contextBridge.exposeInMainWorld("compucart", {
   },
   launch: (root) => ipcRenderer.invoke("cc:launch", root),
   play: () => ipcRenderer.invoke("cc:play"),
-  search: () => ipcRenderer.invoke("cc:search"),
   state: () => ipcRenderer.invoke("cc:state"),
   eject: () => ipcRenderer.invoke("cc:eject"),
   hide: () => ipcRenderer.invoke("cc:hide"),

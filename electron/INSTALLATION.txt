@@ -81,17 +81,6 @@ en toute sécurité »).
 Si la cartouche est quand même retirée sans éjection, les sauvegardes locales
 sont conservées et la synchronisation reprendra au prochain branchement.
 
-Après une éjection, la cartouche n'est plus surveillée, même si elle est
-encore branchée. Pour la retrouver sans la débrancher, cliquez sur
-« 🔍 Rechercher » (ou « Rechercher une cartouche » dans le menu de l'icône).
-Compu-Cart cherche les lecteurs D: à Z:, puis demande à Windows de relancer sa
-détection du matériel et cherche encore. Une cartouche retrouvée ainsi passe
-sur « Prête » : cliquez sur « ▶ Jouer » pour lancer le jeu.
-Cette recherche n'a lieu que quand vous cliquez. Si Windows ne remet pas la
-clé à disposition (c'est possible après une éjection complète, et la relance
-de la détection peut demander les droits administrateur), le Journal l'indique :
-débranchez alors la clé puis rebranchez-la.
-
 4. PREPARER UNE CARTOUCHE
 -------------------------
 Utilisez uniquement un support et un jeu de confiance dont vous avez les droits.
