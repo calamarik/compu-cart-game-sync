@@ -110,7 +110,7 @@ export function Index() {
   const eject = () => {
     if (bridge?.eject) { bridge.eject(); return; }
     timers.current.forEach(clearTimeout);
-    const root = cart.root;
+    const root = cart.root ?? "E:\\";
     setCart({ state: "ejecting", root });
     log("info", `Éjection de ${root} : écriture des données en attente…`);
     timers.current.push(window.setTimeout(() => {
