@@ -193,7 +193,7 @@ function parseEjectOutput(stdout) {
   if (line === "OK") return { status: "removed" };
   if (line === "BUSY") return { status: "busy", detail: "Un programme utilise encore la cartouche (fichier ouvert)." };
   const veto = /^VETO:(\d+):(.*)$/.exec(line);
-  if (veto) return { status: "flushed", detail: `Données écrites et volume démonté, mais Windows n'a pas déconnecté le périphérique (${VETO_REASONS[veto[1]] || "refus"}${veto[2] ? ` : ${veto[2]}` : ""}).` };
+  if (veto) return { status: "vetoed", detail: `Windows n'a pas déconnecté la cartouche (${VETO_REASONS[veto[1]] || "refus"}${veto[2] ? ` : ${veto[2]}` : ""}). Ne la retirez pas : réessayez ou utilisez « Retirer le périphérique en toute sécurité ».` };
   if (line.startsWith("ERR:")) return { status: "error", detail: line.slice(4) };
   return { status: "error", detail: "Réponse inattendue de l'éjection Windows." };
 }
