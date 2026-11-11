@@ -1,6 +1,6 @@
-<#
+﻿<#
   Expérience ProjFS (jetable, ne touche pas à Compu-Cart).
-  Question posée : quand un jeu démarre depuis un dossier ProjFS qui reflète la cartouche,
+  Question posée : quand un jeu démarre depuis un dossier ProjFS qui reflete la cartouche,
   Windows demande-t-il seulement les morceaux de fichiers lus, ou les fichiers entiers ?
 
   Utilisation (PowerShell normal, pas administrateur, après activation de Client-ProjFS) :
@@ -19,33 +19,45 @@ $ErrorActionPreference = "Stop"
 if (-not $Journal) { $Journal = "$Root-journal.txt" }
 $Source = (Resolve-Path $Source).Path.TrimEnd('\')
 
-# 1. Fonctionnalité Windows
-$feature = Get-WindowsOptionalFeature -Online -FeatureName Client-ProjFS
-if ($feature.State -ne "Enabled") {
-  Write-Host "ProjFS n'est pas activé. Dans un PowerShell ADMINISTRATEUR :" -ForegroundColor Yellow
+# 1. Fonctionnalite Windows (la presence de la DLL systeme suffit, pas besoin d'etre administrateur)
+if (-not (Test-Path (Join-Path $env:windir "System32\ProjectedFSLib.dll"))) {
+  Write-Host "ProjFS n'est pas active. Dans un PowerShell ADMINISTRATEUR :" -ForegroundColor Yellow
   Write-Host "  Enable-WindowsOptionalFeature -Online -FeatureName Client-ProjFS -NoRestart" -ForegroundColor Yellow
-  Write-Host "Puis redémarre Windows si on te le demande, et relance ce script."
+  Write-Host "Puis redemarre Windows si on te le demande, et relance ce script."
   exit 1
 }
 
-# 2. Bibliothèque managée Microsoft.Windows.ProjFS (paquet NuGet officiel, téléchargé une fois)
+# 2. Bibliotheque managee Microsoft.Windows.ProjFS (paquet NuGet officiel, telecharge une fois)
 $work = Join-Path $env:LOCALAPPDATA "CompuCart-ProjFS-Test"
-$dll = Get-ChildItem $work -Recurse -Filter "Microsoft.Windows.ProjFS.dll" -ErrorAction SilentlyContinue | Where-Object { $_.FullName -match "net4" } | Select-Object -First 1
+function Find-Dll {
+  $all = @(Get-ChildItem $work -Recurse -Filter "Microsoft.Windows.ProjFS.dll" -ErrorAction SilentlyContinue)
+  foreach ($pattern in @("net4", "netstandard", "")) {
+    $hit = $all | Where-Object { $_.FullName -match [regex]::Escape($pattern) } | Select-Object -First 1
+    if ($hit) { return $hit }
+  }
+}
+$dll = Find-Dll
 if (-not $dll) {
   New-Item -ItemType Directory -Force -Path $work | Out-Null
   $zip = Join-Path $work "projfs.zip"
-  Write-Host "Téléchargement de Microsoft.Windows.ProjFS (NuGet)..."
+  Write-Host "Telechargement de Microsoft.Windows.ProjFS (NuGet)..."
   [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
   Invoke-WebRequest "https://www.nuget.org/api/v2/package/Microsoft.Windows.ProjFS" -OutFile $zip -UseBasicParsing
   Expand-Archive $zip -DestinationPath (Join-Path $work "pkg") -Force
-  $dll = Get-ChildItem $work -Recurse -Filter "Microsoft.Windows.ProjFS.dll" | Where-Object { $_.FullName -match "net4" } | Select-Object -First 1
+  $dll = Find-Dll
 }
-if (-not $dll) { throw "Microsoft.Windows.ProjFS.dll (net4x) introuvable dans le paquet. Envoie-moi le contenu de $work" }
+if (-not $dll) {
+  $listing = Join-Path $work "contenu-du-paquet.txt"
+  Get-ChildItem $work -Recurse | ForEach-Object { $_.FullName.Substring($work.Length) } | Set-Content $listing
+  Write-Host "Aucune Microsoft.Windows.ProjFS.dll dans le paquet. Contenu ecrit dans : $listing" -ForegroundColor Yellow
+  Get-Content $listing | Select-Object -First 60
+  throw "Envoie-moi ce contenu."
+}
 [Reflection.Assembly]::LoadFrom($dll.FullName) | Out-Null
-Write-Host "Bibliothèque : $($dll.FullName)"
+Write-Host "Bibliotheque : $($dll.FullName)"
 
 # 3. Dossier virtuel
-if ($Reset -and (Test-Path $Root)) { Remove-Item $Root -Recurse -Force; Write-Host "Copie locale supprimée." }
+if ($Reset -and (Test-Path $Root)) { Remove-Item $Root -Recurse -Force; Write-Host "Copie locale supprimee." }
 New-Item -ItemType Directory -Force -Path $Root | Out-Null
 $Root = (Resolve-Path $Root).Path.TrimEnd('\')
 
@@ -194,9 +206,9 @@ Add-Type -TypeDefinition $code -ReferencedAssemblies $dll.FullName -Language CSh
 $prov = New-Object CcProvider($Source, $Root, $Journal)
 $prov.Start()
 Write-Host ""
-Write-Host "Dossier virtuel prêt : $Root   (reflète $Source)" -ForegroundColor Green
-Write-Host "Lance maintenant le jeu depuis ce dossier. Ctrl+C pour arrêter et voir le bilan." -ForegroundColor Green
-Write-Host "Journal détaillé : $Journal"
+Write-Host "Dossier virtuel pret : $Root   (reflete $Source)" -ForegroundColor Green
+Write-Host "Lance maintenant le jeu depuis ce dossier. Ctrl+C pour arreter et voir le bilan." -ForegroundColor Green
+Write-Host "Journal detaille : $Journal"
 try {
   while ($true) { Start-Sleep -Seconds 2; Write-Host ("[{0}] {1}" -f (Get-Date -Format HH:mm:ss), $prov.Summary()) }
 } finally {
