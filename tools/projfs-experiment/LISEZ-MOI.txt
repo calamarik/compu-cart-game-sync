@@ -1,0 +1,21 @@
+Expérience ProjFS — jetable, indépendante de Compu-Cart
+========================================================
+But : savoir ce que Windows lit réellement sur la cartouche quand un jeu démarre depuis un dossier
+« à la demande » (ProjFS) : seulement des morceaux de fichiers, ou des fichiers entiers ?
+  - morceaux  -> le cache ne garde que ce que le jeu lit (idéal)
+  - fichiers entiers -> un jeu qui lit 429 Mo dans un .pak de 3 Go remplirait 3 Go (pas intéressant)
+
+1) PowerShell ADMINISTRATEUR, une seule fois :
+     Enable-WindowsOptionalFeature -Online -FeatureName Client-ProjFS -NoRestart
+   (redémarrer Windows si demandé)
+2) PowerShell normal, dans ce dossier :
+     .\projfs-experiment.ps1 -Source "E:\BerserkBoy" -Root "C:\cc-projfs-test\BerserkBoy"
+   (le script télécharge une fois la bibliothèque officielle Microsoft.Windows.ProjFS)
+3) Lance l'exécutable du jeu depuis C:\cc-projfs-test\BerserkBoy (pas depuis E:). Note le temps de chargement.
+4) Ferme le jeu, Ctrl+C dans le script : il affiche le bilan (Mo lus sur la cartouche, fichiers les plus lus).
+5) Relance le script SANS -Reset puis le jeu : le temps de chargement doit chuter (fichiers déjà en local).
+   Pour repartir de zéro : ajoute -Reset.
+Envoie-moi : les temps, le bilan, et le journal (<Root>-journal.txt) si quelque chose se passe mal.
+
+Le code n'a pas pu être testé sur Windows avant d'être écrit : une première erreur de compilation est possible.
+Si le script s'arrête avec un message rouge, envoie-le tel quel.
