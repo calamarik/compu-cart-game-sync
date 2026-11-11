@@ -283,3 +283,71 @@ describe("Safe eject", () => {
     expect(script.startsWith("$Lettre = 'F'\n")).toBe(true);
   });
 });
+describe("Intro pendant le chargement", () => {
+  const fakeChild = () => {
+    const { EventEmitter } = require("node:events");
+    const child: any = new EventEmitter();
+    child.stdout = new EventEmitter();
+    child.kill = vi.fn(() => child.emit("exit", null));
+    return child;
+  };
+
+  it("builds a script that looks for a window of a process started from the cartridge", () => {
+    const script = core.gameWindowScript("E:\\");
+    expect(script).toContain("$p='E:\\'");
+    expect(script).toContain("MainWindowHandle");
+    expect(core.gameWindowScript("E:\\").includes("E:\\\\")).toBe(false);
+  });
+
+  it("never lets the intro end before its minimum duration", () => {
+    expect(core.introRemaining(1000, 1500, 3200)).toBe(2700);
+    expect(core.introRemaining(1000, 9000, 3200)).toBe(0);
+  });
+
+  it("resolves 'window' when the detector prints FOUND, and stops the detector", async () => {
+    const child = fakeChild();
+    const watch = core.waitForGameWindow("E:\\", { spawnFn: () => child, platform: "win32" });
+    child.stdout.emit("data", "FOUND\r\n");
+    expect(await watch.done).toBe("window");
+    expect(child.kill).toHaveBeenCalled();
+  });
+
+  it("resolves 'timeout' when no window shows up, 'cancelled' when the game exits first", async () => {
+    const slow = fakeChild();
+    expect(await core.waitForGameWindow("E:\\", { spawnFn: () => slow, platform: "win32", timeoutMs: 20 }).done).toBe("timeout");
+    const gone = fakeChild();
+    const watch = core.waitForGameWindow("E:\\", { spawnFn: () => gone, platform: "win32" });
+    watch.cancel();
+    expect(await watch.done).toBe("cancelled");
+    expect(gone.kill).toHaveBeenCalled();
+  });
+
+  it("falls back to 'timeout' when the detector cannot start", async () => {
+    const boom = () => { throw new Error("no powershell"); };
+    expect(await core.waitForGameWindow("E:\\", { spawnFn: boom, platform: "win32" }).done).toBe("timeout");
+  });
+
+  it("brings the game window forward: script targets the cartridge processes, runs a limited time and can be cancelled", () => {
+    const script = core.focusGameScript("E:\\", 5000);
+    expect(script).toContain("SetForegroundWindow");
+    expect(script).toContain("$p='E:\\'");
+    expect(script).toContain("AddMilliseconds(5000)");
+    const child = fakeChild();
+    const spawnFn = vi.fn(() => child);
+    const focus = core.focusGameWindow("E:\\", { spawnFn, platform: "win32" });
+    expect(spawnFn).toHaveBeenCalledWith("powershell.exe", expect.arrayContaining(["-EncodedCommand"]), expect.anything());
+    focus.cancel();
+    expect(child.kill).toHaveBeenCalled();
+    expect(() => core.focusGameWindow("E:\\", { spawnFn: () => { throw new Error("x"); }, platform: "win32" }).cancel()).not.toThrow();
+  });
+
+  it.skipIf(process.platform === "win32")("passes the game process to onSpawn at start", async () => {
+    const { cart } = await fixture();
+    const exe = path.join(cart, "game.sh");
+    await writeFile(exe, "#!/bin/sh\nexit 3\n", { mode: 0o755 });
+    let pid = 0;
+    const code = await core.launchGame(cart, { executable: "game.sh" }, (child: any) => { pid = child.pid; });
+    expect(pid).toBeGreaterThan(0);
+    expect(code).toBe(3);
+  });
+});
