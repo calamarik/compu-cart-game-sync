@@ -178,8 +178,8 @@ function run() {
       // Windows (AutoPlay) often opens an Explorer window on the new drive a moment after it was detected and takes the focus:
       // take the front back when the intro starts. Not a full fix, the Windows AutoPlay setting is (see the installation guide).
       showConsole();
-      cart.state = "intro";
-      setCart({ state: "intro", root, manifest, intro: introPayload(root, manifest) });
+      cart.verified = true;
+      beginPlay(cart);
     } catch (e) {
       if (currentCart !== cart) return;
       log("error", e.message);
@@ -218,40 +218,63 @@ function run() {
     if (currentCart === cart) { cart.ejecting = false; cart.state = previous; setCart({ state: previous, root: cart.root }); }
   }
 
-  /** "Jouer" (window button, tray menu): same path as an automatic start: intro, then cc:launch re-checks integrity and starts the game. */
+  /** Intro screen (animation + jingle) and, at the same time, the game start: the intro covers the loading time instead of delaying it. */
+  function beginPlay(cart) {
+    cart.state = "intro";
+    cart.introAt = Date.now();
+    setCart({ state: "intro", root: cart.root, manifest: cart.manifest, intro: introPayload(cart.root, cart.manifest) });
+    startGame(cart);
+  }
+
+  /** "Jouer" (window button, tray menu, Enter): same path as an automatic start. */
   function playCurrent() {
     const cart = currentCart;
     if (!canPlay() || !cart.manifest) { log("warn", launching ? "Un jeu est déjà en cours" : "Aucune cartouche prête à jouer"); return; }
     try {
-      const intro = introPayload(cart.root, cart.manifest);
       showConsole();
-      cart.state = "intro";
-      setCart({ state: "intro", root: cart.root, manifest: cart.manifest, intro });
+      beginPlay(cart);
     } catch (e) {
       log("error", e.message);
     }
   }
 
-  ipcMain.handle("cc:settings", () => ({ autoLaunch: settings.autoLaunch !== false }));
-  ipcMain.handle("cc:setAutoLaunch", (_e, on) => setAutoLaunch(!!on));
-  ipcMain.handle("cc:play", () => playCurrent());
-  ipcMain.handle("cc:state", () => store.snapshot());
-  ipcMain.handle("cc:launch", async (_e, root) => {
-    const cart = currentCart;
-    if (!cart || cart.root !== root || cart.state !== "intro" || launching) return;
+  /**
+   * Starts the game while the intro plays. The integrity check ran at detection; it only runs again for a replay (files may have changed since).
+   * The console state stays "intro" until the game shows a window (never before the minimum intro time), then becomes "running".
+   */
+  async function startGame(cart) {
+    if (launching) return;
     launching = true;
-    let manifest;
+    refreshTray();
+    const { root } = cart;
+    let manifest = cart.manifest;
+    let windowWatch = null;
     try {
-      manifest = await core.readManifest(root);
-      const integrity = await core.verifyIntegrity(root, manifest);
-      if (currentCart !== cart) return;
-      if (!integrity.ok) { cart.state = "corrupt"; setCart({ state: "corrupt", root, manifest }); throw new Error("Intégrité compromise — lancement bloqué"); }
-      cart.state = "running";
-      setCart({ state: "running", root, manifest });
-      log("info", `Lancement de ${manifest.title}`);
+      if (!cart.verified) {
+        manifest = await core.readManifest(root);
+        const integrity = await core.verifyIntegrity(root, manifest);
+        if (currentCart !== cart) return;
+        send("cc:integrity", integrity);
+        if (!integrity.ok) { cart.state = "corrupt"; setCart({ state: "corrupt", root, manifest }); throw new Error("Intégrité compromise — lancement bloqué"); }
+      }
+      cart.verified = false;
+      log("info", `Lancement de ${manifest.title} (l'intro couvre le chargement)`);
       // The console stays fullscreen behind the game: resolution changes never reveal the desktop.
       win.setAlwaysOnTop(false);
-      const code = await core.launchGame(root, manifest);
+      let exited = false;
+      const gameDone = core.launchGame(root, manifest, () => {
+        windowWatch = core.waitForGameWindow(root);
+        windowWatch.done.then(async (why) => {
+          if (exited || why === "cancelled" || currentCart !== cart) return;
+          const wait = core.introRemaining(cart.introAt, Date.now());
+          if (wait) await new Promise((r) => setTimeout(r, wait));
+          if (exited || currentCart !== cart) return;
+          log("info", why === "window" ? "Jeu affiché" : "Jeu en cours (fenêtre non détectée, fin de l'intro)");
+          cart.state = "running";
+          setCart({ state: "running", root, manifest });
+        });
+      });
+      const code = await gameDone.finally(() => { exited = true; windowWatch?.cancel(); });
       showConsole();
       log("info", `Jeu terminé (code ${code}) — synchronisation retour`);
       if (currentCart !== cart) { log("warn", "Cartouche absente : sauvegardes locales conservées, retour reporté"); return; }
@@ -259,13 +282,19 @@ function run() {
       cart.state = "ready";
       setCart({ state: "ready", root, manifest });
     } catch (e) {
+      windowWatch?.cancel();
       log("error", e.message);
-      if (currentCart === cart) { cart.state = "error"; setCart({ state: "error", root, manifest }); }
+      if (currentCart === cart && cart.state !== "corrupt") { cart.state = "error"; setCart({ state: "error", root, manifest }); }
     } finally {
       launching = false;
       refreshTray();
     }
-  });
+  }
+
+  ipcMain.handle("cc:settings", () => ({ autoLaunch: settings.autoLaunch !== false }));
+  ipcMain.handle("cc:setAutoLaunch", (_e, on) => setAutoLaunch(!!on));
+  ipcMain.handle("cc:play", () => playCurrent());
+  ipcMain.handle("cc:state", () => store.snapshot());
   ipcMain.handle("cc:eject", () => ejectCurrent());
   ipcMain.handle("cc:hide", () => hideConsole());
   ipcMain.handle("cc:quit", () => {

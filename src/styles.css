@@ -67,5 +67,9 @@
 
 @keyframes splash-in { 0% { opacity: 0; transform: scale(0.85); filter: blur(8px); } 60% { opacity: 1; transform: scale(1.02); filter: blur(0); } 100% { transform: scale(1); } }
 @keyframes slot-pulse { 50% { box-shadow: 0 0 24px -2px var(--primary); } }
+@keyframes load-sweep { 0% { transform: translateX(-100%); } 100% { transform: translateX(350%); } }
+@keyframes load-dot { 0%, 80%, 100% { opacity: .25; } 40% { opacity: 1; } }
+@utility animate-load-sweep { animation: load-sweep 1.6s ease-in-out infinite; }
+@utility animate-load-dot { animation: load-dot 1.2s ease-in-out infinite; }
 @utility animate-splash { animation: splash-in 1.4s cubic-bezier(.2,.8,.2,1) both; }
 @utility animate-slot { animation: slot-pulse 2s ease-in-out infinite; }
