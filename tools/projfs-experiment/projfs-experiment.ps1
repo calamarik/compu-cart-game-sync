@@ -30,8 +30,10 @@ if (-not (Test-Path (Join-Path $env:windir "System32\ProjectedFSLib.dll"))) {
 # 2. Bibliotheque managee Microsoft.Windows.ProjFS (paquet NuGet officiel, telecharge une fois)
 $work = Join-Path $env:LOCALAPPDATA "CompuCart-ProjFS-Test"
 function Find-Dll {
-  $all = @(Get-ChildItem $work -Recurse -Filter "Microsoft.Windows.ProjFS.dll" -ErrorAction SilentlyContinue)
-  foreach ($pattern in @("net4", "netstandard", "")) {
+  # Le paquet actuel contient ProjectedFSLib.Managed.dll (netstandard2.0, net8.0...) ; l'ancien Microsoft.Windows.ProjFS.dll (net4x).
+  # Windows PowerShell 5.1 (.NET Framework) charge netstandard2.0 ou net4x, pas net8.0+.
+  $all = @(Get-ChildItem $work -Recurse -Include "ProjectedFSLib.Managed.dll", "Microsoft.Windows.ProjFS.dll" -ErrorAction SilentlyContinue)
+  foreach ($pattern in @("netstandard2.0", "net4")) {
     $hit = $all | Where-Object { $_.FullName -match [regex]::Escape($pattern) } | Select-Object -First 1
     if ($hit) { return $hit }
   }
@@ -49,7 +51,7 @@ if (-not $dll) {
 if (-not $dll) {
   $listing = Join-Path $work "contenu-du-paquet.txt"
   Get-ChildItem $work -Recurse | ForEach-Object { $_.FullName.Substring($work.Length) } | Set-Content $listing
-  Write-Host "Aucune Microsoft.Windows.ProjFS.dll dans le paquet. Contenu ecrit dans : $listing" -ForegroundColor Yellow
+  Write-Host "Aucune DLL ProjFS utilisable dans le paquet. Contenu ecrit dans : $listing" -ForegroundColor Yellow
   Get-Content $listing | Select-Object -First 60
   throw "Envoie-moi ce contenu."
 }
@@ -201,7 +203,10 @@ public class CcProvider : IRequiredCallbacks
     }
 }
 '@
-Add-Type -TypeDefinition $code -ReferencedAssemblies $dll.FullName -Language CSharp
+$refs = @($dll.FullName)
+$facade = Join-Path $env:windir "Microsoft.NET\Framework64\v4.0.30319\netstandard.dll"
+if (Test-Path $facade) { $refs += $facade }   # la bibliotheque netstandard2.0 s'appuie sur cette facade .NET Framework
+Add-Type -TypeDefinition $code -ReferencedAssemblies $refs -Language CSharp
 
 $prov = New-Object CcProvider($Source, $Root, $Journal)
 $prov.Start()
