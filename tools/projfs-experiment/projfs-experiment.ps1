@@ -73,7 +73,8 @@ public class CcProvider : IRequiredCallbacks
         src = source;
         log = new StreamWriter(journal, false, new UTF8Encoding(false)); log.AutoFlush = true;
         HResult hr = VirtualizationInstance.MarkDirectoryAsVirtualizationRoot(root, Guid.NewGuid());
-        if (hr != HResult.Ok && hr != HResult.AlreadyInitialized) throw new Exception("MarkDirectoryAsVirtualizationRoot : " + hr);
+        // Already marked by a previous run: not fatal, StartVirtualizing tells if the folder is really unusable.
+        if (hr != HResult.Ok) Console.WriteLine("(marquage du dossier : " + hr + ", on continue)");
         inst = new VirtualizationInstance(root, 0, 0, false, new List<NotificationMapping>());
     }
     public void Start() { HResult hr = inst.StartVirtualizing(this); if (hr != HResult.Ok) throw new Exception("StartVirtualizing : " + hr); Log("Démarré"); }
