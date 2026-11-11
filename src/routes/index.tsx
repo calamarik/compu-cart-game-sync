@@ -24,7 +24,6 @@ type Integrity = { ok: boolean; results: { file: string; ok: boolean }[] };
 type Snapshot = { cart: Cart; integrity: Integrity | null; sync: { localDir: string; cartDir: string; plan: SyncItem[] } | null; logs: Log[] };
 type Bridge = {
   on: (ch: string, cb: (d: any) => void) => (() => void) | void;
-  launch: (root: string) => Promise<void>;
   play?: () => Promise<void>;
   settings?: () => Promise<{ autoLaunch: boolean }>;
   setAutoLaunch?: (on: boolean) => Promise<void>;
@@ -50,6 +49,19 @@ function jingle() {
     g.gain.setValueAtTime(0.08, ctx.currentTime + i * 0.12);
     g.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + i * 0.12 + 0.3);
     o.connect(g).connect(ctx.destination); o.start(ctx.currentTime + i * 0.12); o.stop(ctx.currentTime + i * 0.12 + 0.3);
+  });
+}
+
+/** Second part of the jingle: plays when the game window appears (end of the loading). */
+function jingleEnd() {
+  const ctx = new AudioContext();
+  [784, 988, 1175, 1568].forEach((f, i) => {
+    const o = ctx.createOscillator(), g = ctx.createGain();
+    const t = ctx.currentTime + i * 0.09;
+    o.type = "square"; o.frequency.value = f;
+    g.gain.setValueAtTime(0.07, t);
+    g.gain.exponentialRampToValueAtTime(0.001, t + 0.35);
+    o.connect(g).connect(ctx.destination); o.start(t); o.stop(t + 0.35);
   });
 }
 
@@ -99,22 +111,29 @@ export function Index() {
     };
   }, []);
 
-  // Intro sequence then launch.
+  // Intro: starts with the game (the main process launches it at once); it covers the loading time.
   useEffect(() => {
     if (cart.state !== "intro") return;
     if (cart.intro?.audio) new Audio(cart.intro.audio).play().catch(jingle); else jingle();
+    if (bridge) return;
+    // Demo mode: simulated loading, then the game "appears".
     const t = window.setTimeout(() => {
-      if (bridge && cart.root) bridge.launch(cart.root);
-      else {
-        setCart((c) => ({ ...c, state: "running" }));
-        log("info", `Lancement simulé de ${cart.manifest?.title}`);
-        timers.current.push(window.setTimeout(() => {
-          log("info", "Jeu terminé (simulation) — synchronisation retour");
-          setCart((c) => ({ ...c, state: "ready" }));
-        }, 3500));
-      }
-    }, 3200);
+      setCart((c) => ({ ...c, state: "running" }));
+      log("info", `Lancement simulé de ${cart.manifest?.title}`);
+      timers.current.push(window.setTimeout(() => {
+        log("info", "Jeu terminé (simulation) — synchronisation retour");
+        setCart((c) => ({ ...c, state: "ready" }));
+      }, 3500));
+    }, 5200);
+    timers.current.push(t);
     return () => clearTimeout(t);
+  }, [cart.state]);
+
+  // Second part of the jingle when the intro gives way to the running game.
+  const prevState = useRef<State>("empty");
+  useEffect(() => {
+    if (prevState.current === "intro" && cart.state === "running") jingleEnd();
+    prevState.current = cart.state;
   }, [cart.state]);
 
   const simulate = (corrupt = false) => {
@@ -260,12 +279,23 @@ export function Index() {
 
       {cart.state === "intro" && (
         <div className="fixed inset-0 z-50 grid place-items-center bg-background">
-          {cart.intro?.image ? <img src={cart.intro.image} alt={cart.manifest?.title} className="max-h-[70vh] animate-splash" /> : (
-            <div className="animate-splash text-center">
-              <p className="font-display text-4xl text-primary glow md:text-6xl">COMPU-CART</p>
-              <p className="mt-6 font-display text-sm text-foreground">{cart.manifest?.title}</p>
+          <div className="flex flex-col items-center">
+            {cart.intro?.image ? <img src={cart.intro.image} alt={cart.manifest?.title} className="max-h-[60vh] animate-splash" /> : (
+              <div className="animate-splash text-center">
+                <p className="font-display text-4xl text-primary glow md:text-6xl">COMPU-CART</p>
+                <p className="mt-6 font-display text-sm text-foreground">{cart.manifest?.title}</p>
+              </div>
+            )}
+            <div className="mt-12 w-64 max-w-[70vw]" role="status" aria-live="polite">
+              <div className="relative h-1.5 overflow-hidden rounded-sm bg-primary/15">
+                <div className="animate-load-sweep absolute inset-y-0 left-0 w-1/3 rounded-sm bg-primary shadow-[0_0_12px_var(--primary)]" />
+              </div>
+              <p className="mt-3 text-center font-display text-[10px] uppercase tracking-[0.4em] text-primary/70">
+                Chargement
+                {[0, 1, 2].map((i) => <span key={i} className="animate-load-dot" style={{ animationDelay: `${i * 0.2}s` }}>.</span>)}
+              </p>
             </div>
-          )}
+          </div>
         </div>
       )}
 

@@ -181,16 +181,84 @@ async function syncSaves(root, manifest, appDataDir) {
   return { localDir, cartDir, plan };
 }
 
-/** 3. Orchestrator: launches the game; resolves when it exits (then a final push sync). */
-function launchGame(root, manifest) {
+/** 3. Orchestrator: launches the game; resolves when it exits (then a final push sync). onSpawn gets the child process right after the start. */
+function launchGame(root, manifest, onSpawn) {
   return new Promise((res, rej) => {
     const exe = path.join(root, manifest.executable);
     if (!fs.existsSync(exe)) return rej(new Error(`Exécutable introuvable: ${exe}`));
     const child = spawn(exe, manifest.args || [], { cwd: path.dirname(exe), detached: false });
     child.on("error", rej);
     child.on("exit", (code) => res(code));
+    if (onSpawn) onSpawn(child);
   });
 }
+
+/** PowerShell loop: prints FOUND as soon as a process started from the cartridge owns a visible window. */
+function gameWindowScript(root) {
+  const prefix = String(root).replace(/[\\/]+$/, "").replace(/'/g, "''") + "\\";
+  return `$p='${prefix}';for(;;){if(Get-Process | Where-Object { $_.MainWindowHandle -ne 0 -and $_.Path -and $_.Path.StartsWith($p, [StringComparison]::OrdinalIgnoreCase) }){'FOUND';break};Start-Sleep -Milliseconds 400}`;
+}
+
+/**
+ * Resolves "window" when the game shows a window, "timeout" after timeoutMs (heavy games, launchers that start the game from elsewhere),
+ * "cancelled" when cancel() is called (game exited, cartridge removed). Never rejects: a detection failure just means "timeout".
+ * Without Windows (dev, tests) it resolves "timeout" right away unless a spawn function is injected.
+ */
+function waitForGameWindow(root, { timeoutMs = 120000, spawnFn = spawn, platform = process.platform } = {}) {
+  let cancel = () => {};
+  const done = new Promise((res) => {
+    if (platform !== "win32" && spawnFn === spawn) return res("timeout");
+    let child = null, finished = false;
+    const finish = (r) => {
+      if (finished) return;
+      finished = true;
+      clearTimeout(timer);
+      try { child && child.kill(); } catch {}
+      res(r);
+    };
+    const timer = setTimeout(() => finish("timeout"), timeoutMs);
+    cancel = () => finish("cancelled");
+    try {
+      const encoded = Buffer.from(gameWindowScript(root), "utf16le").toString("base64");
+      child = spawnFn("powershell.exe", ["-NoProfile", "-NonInteractive", "-EncodedCommand", encoded], { windowsHide: true });
+      let out = "";
+      child.stdout.on("data", (d) => { out += d; if (out.includes("FOUND")) finish("window"); });
+      child.on("error", () => finish("timeout"));
+      child.on("exit", () => finish(out.includes("FOUND") ? "window" : "timeout"));
+    } catch { finish("timeout"); }
+  });
+  return { done, cancel: () => cancel() };
+}
+
+/**
+ * PowerShell loop that brings the game window to the front for a few seconds (the game often opens behind the console, or reopens
+ * its window when it switches from windowed to fullscreen). Compu-Cart is the foreground app when it starts the game, which is what lets
+ * Windows accept SetForegroundWindow; the Alt key press is the usual trick when Windows still refuses.
+ */
+function focusGameScript(root, durationMs = 8000) {
+  const prefix = String(root).replace(/[\\/]+$/, "").replace(/'/g, "''") + "\\";
+  return `Add-Type -TypeDefinition 'using System;using System.Runtime.InteropServices;public class CcFg{[DllImport("user32.dll")]public static extern bool SetForegroundWindow(IntPtr h);[DllImport("user32.dll")]public static extern IntPtr GetForegroundWindow();[DllImport("user32.dll")]public static extern bool ShowWindow(IntPtr h,int c);[DllImport("user32.dll")]public static extern bool IsIconic(IntPtr h);[DllImport("user32.dll")]public static extern void keybd_event(byte k,byte s,uint f,UIntPtr e);}'
+$p='${prefix}';$end=(Get-Date).AddMilliseconds(${Math.max(1000, Math.floor(durationMs))})
+while((Get-Date) -lt $end){$g=Get-Process | Where-Object { $_.MainWindowHandle -ne 0 -and $_.Path -and $_.Path.StartsWith($p, [StringComparison]::OrdinalIgnoreCase) } | Select-Object -First 1
+if($g -and [CcFg]::GetForegroundWindow() -ne $g.MainWindowHandle){if([CcFg]::IsIconic($g.MainWindowHandle)){[CcFg]::ShowWindow($g.MainWindowHandle,9)|Out-Null};[CcFg]::keybd_event(0x12,0,0,[UIntPtr]::Zero);[CcFg]::keybd_event(0x12,0,2,[UIntPtr]::Zero);[CcFg]::SetForegroundWindow($g.MainWindowHandle)|Out-Null;'FOCUS'}
+Start-Sleep -Milliseconds 400}`;
+}
+
+/** Runs focusGameScript in the background; cancel() stops it (game exited). No-op outside Windows unless a spawn function is injected. */
+function focusGameWindow(root, { durationMs = 8000, spawnFn = spawn, platform = process.platform } = {}) {
+  let child = null;
+  if (platform === "win32" || spawnFn !== spawn) {
+    try {
+      const encoded = Buffer.from(focusGameScript(root, durationMs), "utf16le").toString("base64");
+      child = spawnFn("powershell.exe", ["-NoProfile", "-NonInteractive", "-EncodedCommand", encoded], { windowsHide: true });
+      child.on("error", () => {});
+    } catch { child = null; }
+  }
+  return { cancel: () => { try { child && child.kill(); } catch {} } };
+}
+
+/** Milliseconds left before the intro may end: it is never cut shorter than minMs, so a fast game does not flash the intro. */
+const introRemaining = (startedAt, now, minMs = 3200) => Math.max(0, startedAt + minMs - now);
 
 /** Only a cartridge plugged in while Compu-Cart runs starts its game by itself. */
 const autoPlays = (reason, autoLaunch = true) => reason === "device" && autoLaunch !== false;
@@ -336,4 +404,4 @@ class AutoplayGuard {
   }
 }
 
-module.exports = { HotplugWatcher, DEFAULT_SETTINGS, readSettings, writeSettings, AutoplayGuard, WM_DEVICECHANGE, deviceEventKind, autoPlays, nextStateAfterSync, StateStore, readManifest, verifyIntegrity, planSync, syncSaves, launchGame, safeCopy, driveLetter, parseEjectOutput, ejectCommand, ejectDrive };
+module.exports = { HotplugWatcher, DEFAULT_SETTINGS, readSettings, writeSettings, AutoplayGuard, WM_DEVICECHANGE, deviceEventKind, autoPlays, nextStateAfterSync, StateStore, readManifest, verifyIntegrity, planSync, syncSaves, launchGame, gameWindowScript, waitForGameWindow, focusGameScript, focusGameWindow, introRemaining, safeCopy, driveLetter, parseEjectOutput, ejectCommand, ejectDrive };

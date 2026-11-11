@@ -142,8 +142,10 @@ Pour vérifier aussi les données du jeu, ajoutez leurs chemins et empreintes
 Pour une intro personnalisée, remplacez intro:{} dans le manifeste par :
   "intro": { "image": "intro.png", "audio": "jingle.mp3" }
 Utilisez une image PNG et un son MP3. Sans ces fichiers, l'intro Compu-Cart
-et son jingle sont joués. Le jeu est lancé automatiquement après 3,2 secondes
-(au branchement, ou quand vous cliquez sur « ▶ Jouer »).
+et son jingle sont joués. Le jeu est lancé immédiatement (au branchement, ou quand
+vous cliquez sur « ▶ Jouer ») : l'intro, avec une animation « Chargement », couvre le
+temps de chargement du jeu. Elle dure au moins 3,2 secondes, puis laisse la place au
+jeu dès que sa fenêtre apparaît (une courte fin de jingle est alors jouée).
 Les chemins sont relatifs à la clé ; les liens et chemins sortant du support
 ne sont pas autorisés. Les SHA-256 détectent les modifications, mais ne
 prouvent pas qu'un jeu est sûr : ils ne remplacent pas un antivirus.
