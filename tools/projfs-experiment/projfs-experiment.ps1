@@ -176,7 +176,7 @@ public class CcProvider : IRequiredCallbacks
                     fs.Seek((long)pos, SeekOrigin.Begin);
                     int got = 0; while (got < n) { int r = fs.Read(tmp, got, (int)n - got); if (r <= 0) break; got += r; }
                     if (got < n) return HResult.InternalError;
-                    using (WriteBuffer wb = inst.CreateWriteBuffer(n))
+                    using (IWriteBuffer wb = inst.CreateWriteBuffer(n))
                     {
                         wb.Stream.Seek(0, SeekOrigin.Begin); wb.Stream.Write(tmp, 0, (int)n);
                         HResult hr = inst.WriteFileData(dataStreamId, wb, pos, n);
