@@ -327,6 +327,20 @@ describe("Intro pendant le chargement", () => {
     expect(await core.waitForGameWindow("E:\\", { spawnFn: boom, platform: "win32" }).done).toBe("timeout");
   });
 
+  it("brings the game window forward: script targets the cartridge processes, runs a limited time and can be cancelled", () => {
+    const script = core.focusGameScript("E:\\", 5000);
+    expect(script).toContain("SetForegroundWindow");
+    expect(script).toContain("$p='E:\\'");
+    expect(script).toContain("AddMilliseconds(5000)");
+    const child = fakeChild();
+    const spawnFn = vi.fn(() => child);
+    const focus = core.focusGameWindow("E:\\", { spawnFn, platform: "win32" });
+    expect(spawnFn).toHaveBeenCalledWith("powershell.exe", expect.arrayContaining(["-EncodedCommand"]), expect.anything());
+    focus.cancel();
+    expect(child.kill).toHaveBeenCalled();
+    expect(() => core.focusGameWindow("E:\\", { spawnFn: () => { throw new Error("x"); }, platform: "win32" }).cancel()).not.toThrow();
+  });
+
   it.skipIf(process.platform === "win32")("passes the game process to onSpawn at start", async () => {
     const { cart } = await fixture();
     const exe = path.join(cart, "game.sh");

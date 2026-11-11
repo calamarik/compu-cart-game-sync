@@ -249,6 +249,7 @@ function run() {
     const { root } = cart;
     let manifest = cart.manifest;
     let windowWatch = null;
+    let focusWatch = null;
     try {
       if (!cart.verified) {
         manifest = await core.readManifest(root);
@@ -272,9 +273,11 @@ function run() {
           log("info", why === "window" ? "Jeu affiché" : "Jeu en cours (fenêtre non détectée, fin de l'intro)");
           cart.state = "running";
           setCart({ state: "running", root, manifest });
+          // Some games open behind the console (slow start, window recreated when switching to fullscreen): bring them forward for a few seconds.
+          focusWatch = core.focusGameWindow(root);
         });
       });
-      const code = await gameDone.finally(() => { exited = true; windowWatch?.cancel(); });
+      const code = await gameDone.finally(() => { exited = true; windowWatch?.cancel(); focusWatch?.cancel(); });
       showConsole();
       log("info", `Jeu terminé (code ${code}) — synchronisation retour`);
       if (currentCart !== cart) { log("warn", "Cartouche absente : sauvegardes locales conservées, retour reporté"); return; }
@@ -283,6 +286,7 @@ function run() {
       setCart({ state: "ready", root, manifest });
     } catch (e) {
       windowWatch?.cancel();
+      focusWatch?.cancel();
       log("error", e.message);
       if (currentCart === cart && cart.state !== "corrupt") { cart.state = "error"; setCart({ state: "error", root, manifest }); }
     } finally {
