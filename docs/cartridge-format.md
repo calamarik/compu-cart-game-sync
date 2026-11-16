@@ -81,9 +81,13 @@ embarquée dans Compu-Cart, identique pour toutes les cartouches.
 
 - **Un seul jeu** : comme avant. Vérification d'intégrité et synchronisation des sauvegardes au branchement, puis intro
   et lancement automatique (selon l'option « Lancement auto »).
-- **Plusieurs jeux** : aucun jeu n'est lancé tout seul. La console passe sur « Prête » et affiche la liste (flèches +
-  Entrée, souris, ou sous-menu « Jouer » de l'icône). Le jeu choisi est alors vérifié et synchronisé pendant l'intro,
-  puis lancé. Un jeu corrompu est refusé sans bloquer les autres. À la fermeture du jeu : synchronisation retour puis
-  retour à « Prête » (comme pour une cartouche mono-jeu).
+- **Plusieurs jeux, « Lancement auto » ON, cartouche branchée pendant que Compu-Cart tourne** : aucun jeu n'est lancé
+  tout seul, mais l'intro démarre (jingle) sur le nom de la cartouche, avec la liste des jeux dessous (flèches + Entrée,
+  ou souris ; Échap ferme l'écran et laisse la liste dans la console). Le choix rejoue l'intro avec le nom du seul jeu
+  choisi (jingle, animation « Chargement ») et lance le jeu comme pour une cartouche mono-jeu : il est vérifié et
+  synchronisé pendant cette intro. Un jeu corrompu est refusé sans bloquer les autres. À la fermeture du jeu :
+  synchronisation retour puis retour à « Prête » (comme pour une cartouche mono-jeu).
+- **Plusieurs jeux, « Lancement auto » OFF, ou cartouche déjà présente au démarrage de Compu-Cart** : pas d'intro, la
+  console passe sur « Prête » avec la liste (flèches + Entrée, souris, sous-menu « Jouer » de l'icône).
 - Aucune compatibilité avec l'ancien format (un seul `compucart.json` décrivant un jeu, `saveDir`, `intro`) : l'application
   n'était pas encore publiée. Un tel fichier est refusé (`schemaVersion` requis). Les cartouches de test sont à reforger.

@@ -71,8 +71,8 @@ function run() {
     }
   }
 
-  const canEject = () => currentCart && !launching && !currentCart.ejecting && ["ready", "intro", "corrupt", "error"].includes(currentCart.state);
-  const canPlay = () => currentCart && !launching && !currentCart.ejecting && currentCart.state === "ready";
+  const canEject = () => currentCart && !launching && !currentCart.ejecting && ["ready", "choose", "intro", "corrupt", "error"].includes(currentCart.state);
+  const canPlay = () => currentCart && !launching && !currentCart.ejecting && ["ready", "choose"].includes(currentCart.state);
 
   /** What the window gets for a cartridge: titles only, never the checksums. `game` is the game being checked or played. */
   const view = (cart, state = cart.state) => ({
@@ -165,7 +165,8 @@ function run() {
   }
 
   /**
-   * reason "startup": cartridge already there at launch (stops on "Prête"); "device": plugged while running (intro, then the game starts by itself).
+   * reason "startup": cartridge already there at launch (stops on "Prête"); "device": plugged while running (intro, then the game starts by itself;
+   * with several games the intro shows the cartridge title and the list, state "choose", and the picked game starts).
    * A single-game cartridge is checked and synced right away. With several games nothing is read beyond the manifests here:
    * the game the player picks is checked and synced when it is launched (startGame), so a big compilation does not delay the menu.
    */
@@ -190,8 +191,18 @@ function run() {
         if (result !== "ok") return;
         cart.prepared = true;
       }
-      if (core.nextStateAfterSync(reason, settings.autoLaunch, cartridge.games.length) === "ready") {
-        // Several games, or plugged in with auto launch off: show the console (Play, Enter or a game of the list starts it). Found at launch: stay quiet.
+      const next = core.nextStateAfterSync(reason, settings.autoLaunch, cartridge.games.length);
+      if (next === "choose") {
+        // Several games, plugged in with auto launch on: the intro shows the cartridge title and the list of games; picking one
+        // (cc:play) plays the intro again with that game's name and starts it. Nothing is checked or synced before that.
+        showConsole();
+        cart.state = "choose";
+        setCart(view(cart, "choose"));
+        log("ok", `${cartridge.title} — ${cartridge.games.length} jeux : choisissez celui à lancer`);
+        return;
+      }
+      if (next === "ready") {
+        // Plugged in with auto launch off (or found at launch): show the console, Play / Enter / a game of the list starts it. Found at launch: stay quiet.
         if (reason === "device") showConsole();
         cart.state = "ready";
         setCart(view(cart, "ready"));
@@ -326,6 +337,14 @@ function run() {
   ipcMain.handle("cc:settings", () => ({ autoLaunch: settings.autoLaunch !== false }));
   ipcMain.handle("cc:setAutoLaunch", (_e, on) => setAutoLaunch(!!on));
   ipcMain.handle("cc:play", (_e, gameId) => playCurrent(typeof gameId === "string" ? gameId : undefined));
+  // Escape on the game selection: back to the console (Éjecter, Réduire...), the games stay playable from its list.
+  ipcMain.handle("cc:cancel", () => {
+    const cart = currentCart;
+    if (!cart || cart.state !== "choose" || launching) return;
+    cart.state = "ready";
+    setCart(view(cart, "ready"));
+    log("info", "Choix du jeu fermé — la liste reste dans la console");
+  });
   ipcMain.handle("cc:state", () => store.snapshot());
   ipcMain.handle("cc:eject", () => ejectCurrent());
   ipcMain.handle("cc:hide", () => hideConsole());

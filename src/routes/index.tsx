@@ -16,7 +16,7 @@ export const Route = createFileRoute("/")({
   component: Index,
 });
 
-type State = "empty" | "verifying" | "corrupt" | "syncing" | "intro" | "ready" | "running" | "error" | "ejecting" | "ejected";
+type State = "empty" | "verifying" | "corrupt" | "syncing" | "choose" | "intro" | "ready" | "running" | "error" | "ejecting" | "ejected";
 type Game = { id: string; title: string; executable?: string };
 /** A cartridge is a list of games (one game = a list of one). `game` is the one being checked or played. */
 type Cart = { state: State; root?: string; title?: string; games?: Game[]; game?: Game };
@@ -26,6 +26,7 @@ type Snapshot = { cart: Cart; integrity: Integrity | null; sync: { localDir: str
 type Bridge = {
   on: (ch: string, cb: (d: any) => void) => (() => void) | void;
   play?: (gameId?: string) => Promise<void>;
+  cancel?: () => Promise<void>;
   settings?: () => Promise<{ autoLaunch: boolean }>;
   setAutoLaunch?: (on: boolean) => Promise<void>;
   state?: () => Promise<Snapshot>;
@@ -33,7 +34,7 @@ type Bridge = {
   hide?: () => Promise<void>;
   quit?: () => Promise<void>;
 };
-const EJECTABLE: State[] = ["ready", "corrupt", "error"];
+const EJECTABLE: State[] = ["ready", "choose", "corrupt", "error"];
 
 const STEPS: { key: State[]; label: string }[] = [
   { key: ["verifying"], label: "Intégrité" },
@@ -113,7 +114,13 @@ export function Index() {
     };
   }, []);
 
+  // Several games (auto launch on): the intro opens on the cartridge title and the list of games, with the jingle.
+  useEffect(() => {
+    if (cart.state === "choose") jingle();
+  }, [cart.state]);
+
   // Intro: starts with the game (the main process launches it at once); it covers the loading time.
+  // After a pick in the list it plays again, this time with the chosen game only.
   useEffect(() => {
     if (cart.state !== "intro") return;
     jingle();
@@ -152,7 +159,7 @@ export function Index() {
     setCart({ state: "verifying", ...(multi ? base : single) });
     if (multi) {
       // Several games: nothing is launched, the player picks one (it is checked and synced when launched).
-      at(600, () => { setCart({ state: "ready", ...base }); log("ok", `Cartouche prête — ${games.length} jeux : choisissez celui à lancer`); });
+      at(600, () => { setCart({ state: autoLaunch ? "choose" : "ready", ...base }); log("ok", `${base.title} — ${games.length} jeux : choisissez celui à lancer`); });
       return;
     }
     at(1200, () => {
@@ -183,7 +190,8 @@ export function Index() {
     }, 1200));
   };
   const canEject = !!cart.root && EJECTABLE.includes(cart.state);
-  const canPlay = cart.state === "ready" && !!cart.root;
+  const canPlay = (cart.state === "ready" || cart.state === "choose") && !!cart.root;
+  const choosing = cart.state === "choose";
   const gameCount = cart.games?.length ?? 0;
   const multi = gameCount > 1;
   useEffect(() => setSelected(0), [cart.root]);
@@ -206,6 +214,12 @@ export function Index() {
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (!canPlay) return;
+      if (choosing && e.key === "Escape") {
+        e.preventDefault();
+        if (bridge?.cancel) bridge.cancel();
+        else setCart((c) => ({ ...c, state: "ready" }));
+        return;
+      }
       if (multi && (e.key === "ArrowDown" || e.key === "ArrowUp")) {
         e.preventDefault();
         setSelected((i) => (i + (e.key === "ArrowDown" ? 1 : -1) + gameCount) % gameCount);
@@ -213,7 +227,7 @@ export function Index() {
       }
       if ((e.key !== "Enter" && e.key !== " ") || e.repeat) return;
       const tag = (e.target as HTMLElement | null)?.tagName;
-      if (tag && ["INPUT", "TEXTAREA", "SELECT", "BUTTON", "A"].includes(tag)) return;
+      if (!choosing && tag && ["INPUT", "TEXTAREA", "SELECT", "BUTTON", "A"].includes(tag)) return;
       e.preventDefault();
       play(multi ? cart.games?.[selected]?.id : undefined);
     };
@@ -271,7 +285,7 @@ export function Index() {
               {canPlay && !multi && <button onClick={() => play()} className="mt-4 rounded-sm bg-primary px-5 py-2 text-sm font-bold text-primary-foreground hover:opacity-90">▶ Jouer</button>}
               {canPlay && <p className="mt-2 text-xs text-muted-foreground">{multi ? "↑ ↓ pour choisir, Entrée pour lancer" : "ou appuyez sur Entrée"}</p>}
             </div>
-            <span className="ml-auto rounded-sm bg-secondary px-3 py-1 text-xs uppercase tracking-widest text-primary">{cart.state === "ready" ? "prête" : cart.state}</span>
+            <span className="ml-auto rounded-sm bg-secondary px-3 py-1 text-xs uppercase tracking-widest text-primary">{cart.state === "ready" ? "prête" : cart.state === "choose" ? "choix du jeu" : cart.state}</span>
           </div>
 
           <ol className="mt-6 grid grid-cols-4 gap-2">
@@ -312,22 +326,50 @@ export function Index() {
         </section>
       </div>
 
-      {cart.state === "intro" && (
+      {(cart.state === "intro" || choosing) && (
         <div className="fixed inset-0 z-50 grid place-items-center bg-background">
           <div className="flex flex-col items-center">
-            <div className="animate-splash text-center">
-              <p className="font-display text-4xl text-primary glow md:text-6xl">COMPU-CART</p>
-              <p className="mt-6 font-display text-sm text-foreground">{cart.game?.title}</p>
-            </div>
-            <div className="mt-12 w-64 max-w-[70vw]" role="status" aria-live="polite">
-              <div className="relative h-1.5 overflow-hidden rounded-sm bg-primary/15">
-                <div className="animate-load-sweep absolute inset-y-0 left-0 w-1/3 rounded-sm bg-primary shadow-[0_0_12px_var(--primary)]" />
+            {choosing ? (
+              <div key="choose" className="animate-splash text-center">
+                <p className="font-display text-4xl text-primary glow md:text-6xl">COMPU-CART</p>
+                <p className="mt-6 font-display text-sm text-foreground">{cart.title}</p>
               </div>
-              <p className="mt-3 text-center font-display text-[10px] uppercase tracking-[0.4em] text-primary/70">
-                Chargement
-                {[0, 1, 2].map((i) => <span key={i} className="animate-load-dot" style={{ animationDelay: `${i * 0.2}s` }}>.</span>)}
-              </p>
-            </div>
+            ) : (
+              <div key="intro" className="animate-splash text-center">
+                <p className="font-display text-4xl text-primary glow md:text-6xl">COMPU-CART</p>
+                <p className="mt-6 font-display text-sm text-foreground">{cart.game?.title}</p>
+              </div>
+            )}
+            {choosing ? (
+              <nav className="mt-10 w-80 max-w-[80vw]" aria-label="Jeux de la cartouche">
+                <ul className="space-y-2">
+                  {cart.games?.map((g, i) => (
+                    <li key={g.id}>
+                      <button
+                        tabIndex={-1} // the selection (arrows, mouse hover) decides what Enter starts, never the keyboard focus
+                        onClick={() => play(g.id)}
+                        onMouseEnter={() => setSelected(i)}
+                        aria-current={i === selected}
+                        className={`w-full rounded-sm border px-5 py-3 text-left font-display text-xs ${i === selected ? "border-primary bg-primary/10 text-primary glow" : "border-border text-foreground hover:bg-secondary"}`}
+                      >
+                        {i === selected ? "▶ " : "  "}{g.title}
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+                <p className="mt-4 text-center text-[10px] uppercase tracking-[0.3em] text-muted-foreground">↑ ↓ choisir · Entrée lancer · Échap console</p>
+              </nav>
+            ) : (
+              <div className="mt-12 w-64 max-w-[70vw]" role="status" aria-live="polite">
+                <div className="relative h-1.5 overflow-hidden rounded-sm bg-primary/15">
+                  <div className="animate-load-sweep absolute inset-y-0 left-0 w-1/3 rounded-sm bg-primary shadow-[0_0_12px_var(--primary)]" />
+                </div>
+                <p className="mt-3 text-center font-display text-[10px] uppercase tracking-[0.4em] text-primary/70">
+                  Chargement
+                  {[0, 1, 2].map((i) => <span key={i} className="animate-load-dot" style={{ animationDelay: `${i * 0.2}s` }}>.</span>)}
+                </p>
+              </div>
+            )}
           </div>
         </div>
       )}

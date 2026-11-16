@@ -307,10 +307,15 @@ const introRemaining = (startedAt, now, minMs = 3200) => Math.max(0, startedAt +
 const autoPlays = (reason, autoLaunch = true) => reason === "device" && autoLaunch !== false;
 
 /**
- * After verification and sync: play the intro and launch, or stop on "ready" and wait for the player.
- * A cartridge with several games never launches by itself: the player picks the game.
+ * After verification and sync, what the console does:
+ *  - "intro":  play the intro and launch the game (single-game cartridge, auto launch);
+ *  - "choose": fullscreen intro with the cartridge title and the list of games, the player picks one (several games, auto launch);
+ *  - "ready":  stop and wait for the player (Play button or the list of the console): auto launch off, or cartridge found at startup.
  */
-const nextStateAfterSync = (reason, autoLaunch = true, gameCount = 1) => (gameCount === 1 && autoPlays(reason, autoLaunch) ? "intro" : "ready");
+const nextStateAfterSync = (reason, autoLaunch = true, gameCount = 1) => {
+  if (!autoPlays(reason, autoLaunch)) return "ready";
+  return gameCount > 1 ? "choose" : "intro";
+};
 
 /**
  * Latest console state, kept in the main process. The window may open (or

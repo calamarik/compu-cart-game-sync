@@ -123,11 +123,15 @@ Une cartouche contient un ou plusieurs jeux. Structure de votre clé USB
 Le format exact est décrit dans docs/cartridge-format.md du projet.
 
 Avec plusieurs jeux sur la même cartouche, aucun jeu ne démarre tout seul au
-branchement : Compu-Cart affiche la liste. Choisissez avec les flèches haut/bas
-puis Entrée, ou cliquez sur un jeu (ou utilisez « Jouer » dans le menu de
-l'icône). Le jeu choisi est vérifié et ses sauvegardes sont synchronisées
-pendant l'intro, puis il est lancé. À la fermeture du jeu, Compu-Cart revient
-à la liste.
+branchement. Avec « Lancement auto » sur ON, l'intro démarre sur le nom de la
+cartouche avec la liste des jeux dessous : choisissez avec les flèches haut/bas
+puis Entrée, ou cliquez sur un jeu. L'intro est alors rejouée avec le nom du jeu
+choisi pendant qu'il se lance (il est vérifié et ses sauvegardes sont
+synchronisées à ce moment-là). Échap ferme l'écran de choix et laisse la liste
+dans la console. Avec « Lancement auto » sur OFF, ou si la cartouche était déjà
+branchée au démarrage de Compu-Cart, la console affiche directement la liste
+(ou le menu « Jouer » de l'icône). À la fermeture du jeu, Compu-Cart revient à la
+liste.
 
 Avec un seul jeu, le jeu est lancé immédiatement (au branchement, ou quand
 vous cliquez sur « ▶ Jouer ») : l'intro, avec une animation « Chargement »,

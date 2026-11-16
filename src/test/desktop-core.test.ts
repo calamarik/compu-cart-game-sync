@@ -252,10 +252,17 @@ describe("Ready or auto-play", () => {
     expect(core.nextStateAfterSync("device", false)).toBe("ready");
     expect(core.nextStateAfterSync("startup", false)).toBe("ready");
   });
-  it("a cartridge with several games never launches by itself: the player picks the game", () => {
-    expect(core.nextStateAfterSync("device", true, 2)).toBe("ready");
-    expect(core.nextStateAfterSync("device", true, 5)).toBe("ready");
+  it("a cartridge with several games never launches a game by itself: auto launch opens the selection intro, otherwise ready", () => {
+    expect(core.nextStateAfterSync("device", true, 2)).toBe("choose");
+    expect(core.nextStateAfterSync("device", true, 5)).toBe("choose");
+    expect(core.nextStateAfterSync("device", undefined, 3)).toBe("choose");
     expect(core.nextStateAfterSync("device", true, 1)).toBe("intro");
+  });
+  it("several games with auto launch off, or found at startup, stop on ready with the list in the console", () => {
+    expect(core.nextStateAfterSync("device", false, 2)).toBe("ready");
+    expect(core.nextStateAfterSync("startup", true, 2)).toBe("ready");
+    expect(core.nextStateAfterSync("startup", false, 4)).toBe("ready");
+    expect(core.nextStateAfterSync("manual", true, 2)).toBe("ready");
   });
   it("with auto launch on, or when the option is unknown, nothing changes", () => {
     expect(core.autoPlays("device", true)).toBe(true);
