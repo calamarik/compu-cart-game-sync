@@ -6,7 +6,16 @@ const crypto = require("crypto");
 const { spawn, spawnSync } = require("child_process");
 const { EventEmitter } = require("events");
 
-const MANIFEST = "compucart.json";
+// Cartridge layout (see docs/cartridge-format.md):
+//   compucart.json          the cartridge: optional title + the ids of its games, in display order
+//   manifests/<id>.json     one manifest per game
+//   games/<id>/             the installed game
+//   saves/<id>/             its saves (derived from the id, never stored in a manifest)
+const CARTRIDGE_FILE = "compucart.json";
+const MANIFESTS_DIR = "manifests";
+const SAVES_DIR = "saves";
+const SCHEMA_VERSION = 1;
+const ID_PATTERN = /^[a-zA-Z0-9_-]+$/;
 
 const WM_DEVICECHANGE = 0x0219;
 const DBT = { 0x0007: "change", 0x8000: "arrival", 0x8004: "removal" };
@@ -25,7 +34,7 @@ class HotplugWatcher extends EventEmitter {
     super();
     this.pollMs = pollMs;
     this.letters = letters;
-    this.exists = exists || ((root) => fs.existsSync(path.join(root, MANIFEST)));
+    this.exists = exists || ((root) => fs.existsSync(path.join(root, CARTRIDGE_FILE)));
     this.now = now;
     this.rescanDelays = rescanDelays;
     this.startupDelays = startupDelays;
@@ -78,18 +87,52 @@ class HotplugWatcher extends EventEmitter {
   }
 }
 
-async function readManifest(root) {
-  const m = JSON.parse(await fsp.readFile(path.join(root, MANIFEST), "utf8"));
-  if (!/^[a-zA-Z0-9_-]+$/.test(m.id || "") || typeof m.title !== "string" || !m.title || typeof m.executable !== "string") throw new Error("Manifeste invalide (id/title/executable requis)");
-  const manifest = { saveDir: "saves", intro: {}, ...m };
-  if (!manifest.checksums || typeof manifest.checksums !== "object" || Array.isArray(manifest.checksums)) throw new Error("Empreintes SHA-256 requises");
-  if (!manifest.checksums[manifest.executable]) throw new Error("Empreinte SHA-256 de l'exécutable requise");
-  if (manifest.args !== undefined && (!Array.isArray(manifest.args) || manifest.args.some((arg) => typeof arg !== "string"))) throw new Error("Arguments invalides");
-  for (const rel of [manifest.executable, manifest.saveDir, manifest.intro?.image, manifest.intro?.audio, ...Object.keys(manifest.checksums)]) {
-    if (rel !== undefined) await validatePath(root, rel);
-  }
-  for (const hash of Object.values(manifest.checksums)) if (!/^[a-f0-9]{64}$/i.test(hash)) throw new Error("Empreinte SHA-256 invalide");
+const isObject = (value) => !!value && typeof value === "object" && !Array.isArray(value);
+
+/** Reads a JSON file of the cartridge (path checked: relative, inside the cartridge, no links). */
+async function readJson(root, rel, label) {
+  const file = await validatePath(root, rel);
+  let raw;
+  try { raw = await fsp.readFile(file, "utf8"); } catch { throw new Error(`${label} introuvable (${rel})`); }
+  try { return JSON.parse(raw); } catch { throw new Error(`${label} illisible : JSON invalide (${rel})`); }
+}
+
+/** manifests/<id>.json: one game. Every path is relative to the cartridge root. */
+async function readGameManifest(root, id) {
+  const label = `Manifeste de ${id}`;
+  const manifest = await readJson(root, `${MANIFESTS_DIR}/${id}.json`, label);
+  if (!isObject(manifest)) throw new Error(`${label} invalide`);
+  if (manifest.schemaVersion !== SCHEMA_VERSION) throw new Error(`${label} : schemaVersion ${SCHEMA_VERSION} requis`);
+  if (manifest.id !== id) throw new Error(`${label} : l'identifiant du fichier (${id}) ne correspond pas à « id » (${manifest.id})`);
+  if (typeof manifest.title !== "string" || !manifest.title || typeof manifest.executable !== "string") throw new Error(`${label} invalide (title/executable requis)`);
+  if (!isObject(manifest.checksums)) throw new Error(`${label} : empreintes SHA-256 requises`);
+  if (!manifest.checksums[manifest.executable]) throw new Error(`${label} : empreinte SHA-256 de l'exécutable requise`);
+  if (manifest.args !== undefined && (!Array.isArray(manifest.args) || manifest.args.some((arg) => typeof arg !== "string"))) throw new Error(`${label} : arguments invalides`);
+  for (const rel of [manifest.executable, `${SAVES_DIR}/${id}`, ...Object.keys(manifest.checksums)]) await validatePath(root, rel);
+  for (const hash of Object.values(manifest.checksums)) if (!/^[a-f0-9]{64}$/i.test(hash)) throw new Error(`${label} : empreinte SHA-256 invalide`);
   return manifest;
+}
+
+/**
+ * compucart.json + the manifest of each listed game. A cartridge always lists at least one game
+ * (a single-game cartridge is a list of one). Returns { title, games }: games in display order,
+ * title = the cartridge title, else the game title when there is only one game.
+ */
+async function readCartridge(root) {
+  const index = await readJson(root, CARTRIDGE_FILE, CARTRIDGE_FILE);
+  if (!isObject(index)) throw new Error(`${CARTRIDGE_FILE} invalide`);
+  if (index.schemaVersion !== SCHEMA_VERSION) throw new Error(`${CARTRIDGE_FILE} : schemaVersion ${SCHEMA_VERSION} requis (format de cartouche non reconnu)`);
+  if (index.title !== undefined && (typeof index.title !== "string" || !index.title)) throw new Error(`${CARTRIDGE_FILE} : titre invalide`);
+  if (!Array.isArray(index.games) || index.games.length === 0) throw new Error(`${CARTRIDGE_FILE} : la liste « games » est requise (au moins un identifiant de jeu)`);
+  const seen = new Set();
+  for (const id of index.games) {
+    if (typeof id !== "string" || !ID_PATTERN.test(id)) throw new Error(`${CARTRIDGE_FILE} : identifiant de jeu invalide (${JSON.stringify(id)})`);
+    if (seen.has(id.toLowerCase())) throw new Error(`${CARTRIDGE_FILE} : jeu en double (${id})`); // Windows folders ignore the case
+    seen.add(id.toLowerCase());
+  }
+  const games = [];
+  for (const id of index.games) games.push(await readGameManifest(root, id));
+  return { title: index.title || (games.length === 1 ? games[0].title : "Cartouche multijeu"), games };
 }
 
 async function validatePath(root, rel) {
@@ -170,7 +213,7 @@ async function safeCopy(src, dst) {
 /** 2. Savegame Sync Engine (bi-directional). */
 async function syncSaves(root, manifest, appDataDir) {
   const localDir = path.join(appDataDir, "CompuCart", "saves", manifest.id);
-  const cartDir = path.join(root, manifest.saveDir);
+  const cartDir = path.join(root, SAVES_DIR, manifest.id);
   await fsp.mkdir(localDir, { recursive: true });
   await fsp.mkdir(cartDir, { recursive: true });
   const plan = planSync(await listFiles(localDir), await listFiles(cartDir));
@@ -263,8 +306,11 @@ const introRemaining = (startedAt, now, minMs = 3200) => Math.max(0, startedAt +
 /** Only a cartridge plugged in while Compu-Cart runs starts its game by itself. */
 const autoPlays = (reason, autoLaunch = true) => reason === "device" && autoLaunch !== false;
 
-/** After verification and sync: play the intro and launch, or stop on "ready" and wait for the Play button. */
-const nextStateAfterSync = (reason, autoLaunch = true) => (autoPlays(reason, autoLaunch) ? "intro" : "ready");
+/**
+ * After verification and sync: play the intro and launch, or stop on "ready" and wait for the player.
+ * A cartridge with several games never launches by itself: the player picks the game.
+ */
+const nextStateAfterSync = (reason, autoLaunch = true, gameCount = 1) => (gameCount === 1 && autoPlays(reason, autoLaunch) ? "intro" : "ready");
 
 /**
  * Latest console state, kept in the main process. The window may open (or
@@ -404,4 +450,4 @@ class AutoplayGuard {
   }
 }
 
-module.exports = { HotplugWatcher, DEFAULT_SETTINGS, readSettings, writeSettings, AutoplayGuard, WM_DEVICECHANGE, deviceEventKind, autoPlays, nextStateAfterSync, StateStore, readManifest, verifyIntegrity, planSync, syncSaves, launchGame, gameWindowScript, waitForGameWindow, focusGameScript, focusGameWindow, introRemaining, safeCopy, driveLetter, parseEjectOutput, ejectCommand, ejectDrive };
+module.exports = { HotplugWatcher, DEFAULT_SETTINGS, readSettings, writeSettings, AutoplayGuard, WM_DEVICECHANGE, deviceEventKind, autoPlays, nextStateAfterSync, StateStore, readCartridge, readGameManifest, verifyIntegrity, planSync, syncSaves, launchGame, gameWindowScript, waitForGameWindow, focusGameScript, focusGameWindow, introRemaining, safeCopy, driveLetter, parseEjectOutput, ejectCommand, ejectDrive };

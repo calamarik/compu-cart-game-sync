@@ -110,42 +110,38 @@ sont conservées et la synchronisation reprendra au prochain branchement.
 Utilisez uniquement un support et un jeu de confiance dont vous avez les droits.
 Le jeu doit pouvoir être lancé directement : ses propres dépendances,
 licences, pilotes ou installateurs ne sont pas inclus.
-Aucun jeu n'est fourni. Le dossier exemple-cartouche (dans le dossier
-d'installation) contient seulement un modèle de manifeste.
+Aucun jeu n'est fourni. Les cartouches sont préparées avec la forge Compu-Cart,
+un outil séparé qui n'est pas installé avec Compu-Cart.
 
-Exemple de structure de votre clé USB (lettre E: donnée à titre d'exemple) :
-  E:\compucart.json
-  E:\bin\MonJeu.exe
-  E:\saves\
-  E:\intro.png       (facultatif)
-  E:\jingle.mp3      (facultatif)
+Une cartouche contient un ou plusieurs jeux. Structure de votre clé USB
+(lettre E: donnée à titre d'exemple) :
+  E:\compucart.json          liste des jeux de la cartouche
+  E:\manifests\mon-jeu.json  un fichier par jeu
+  E:\games\mon-jeu\          le jeu installé
+  E:\saves\mon-jeu\          ses sauvegardes
+  E:\Mon jeu.lnk             raccourci (pour jouer sans Compu-Cart)
+Le format exact est décrit dans docs/cartridge-format.md du projet.
 
-Après avoir copié un jeu portable sur la clé, ouvrez Windows PowerShell dans
-le dossier d'installation (%LOCALAPPDATA%\Programs\Compu-Cart) et lancez :
+Avec plusieurs jeux sur la même cartouche, aucun jeu ne démarre tout seul au
+branchement : Compu-Cart affiche la liste. Choisissez avec les flèches haut/bas
+puis Entrée, ou cliquez sur un jeu (ou utilisez « Jouer » dans le menu de
+l'icône). Le jeu choisi est vérifié et ses sauvegardes sont synchronisées
+pendant l'intro, puis il est lancé. À la fermeture du jeu, Compu-Cart revient
+à la liste.
 
-  powershell.exe -NoProfile -File ".\outils\Preparer-Cartouche.ps1" -Racine "E:\" -Id "mon-jeu" -Titre "Mon jeu" -Executable "bin\MonJeu.exe"
+Avec un seul jeu, le jeu est lancé immédiatement (au branchement, ou quand
+vous cliquez sur « ▶ Jouer ») : l'intro, avec une animation « Chargement »,
+couvre le temps de chargement du jeu. Elle dure au moins 3,2 secondes, puis laisse
+la place au jeu dès que sa fenêtre apparaît (une courte fin de jingle est alors
+jouée). L'intro est celle de Compu-Cart, la même pour toutes les cartouches.
 
-Remplacez E:, l'identifiant, le titre et le chemin par vos valeurs réelles.
-L'outil crée compucart.json, l'empreinte de l'exécutable et le dossier saves.
-Si votre politique PowerShell bloque les scripts, utilisez la méthode
-manuelle ci-dessous plutôt que de modifier votre politique de sécurité.
-
-Méthode manuelle : calculez l'empreinte avec :
-  Get-FileHash "E:\bin\MonJeu.exe" -Algorithm SHA256
-Copiez exemple-cartouche\compucart.modele.json vers E:\compucart.json,
-remplacez tous les champs et le marqueur d'empreinte par votre valeur SHA-256
-de 64 caractères (0-9 et a-f, sans espace). Enregistrez le JSON en UTF-8.
-Chaque chemin de checksums doit correspondre exactement au fichier.
-Pour vérifier aussi les données du jeu, ajoutez leurs chemins et empreintes
-à checksums. La vérification ne porte que sur les fichiers listés.
-
-Pour une intro personnalisée, remplacez intro:{} dans le manifeste par :
-  "intro": { "image": "intro.png", "audio": "jingle.mp3" }
-Utilisez une image PNG et un son MP3. Sans ces fichiers, l'intro Compu-Cart
-et son jingle sont joués. Le jeu est lancé immédiatement (au branchement, ou quand
-vous cliquez sur « ▶ Jouer ») : l'intro, avec une animation « Chargement », couvre le
-temps de chargement du jeu. Elle dure au moins 3,2 secondes, puis laisse la place au
-jeu dès que sa fenêtre apparaît (une courte fin de jingle est alors jouée).
+Chaque jeu est décrit par manifests/<id>.json, avec l'empreinte SHA-256 de son
+exécutable. Pour la calculer à la main :
+  Get-FileHash "E:\games\mon-jeu\MonJeu.exe" -Algorithm SHA256
+La valeur est composée de 64 caractères (0-9 et a-f, sans espace). Chaque chemin
+de checksums doit correspondre exactement au fichier. Pour vérifier aussi les
+données du jeu, ajoutez leurs chemins et empreintes à checksums. La vérification
+ne porte que sur les fichiers listés.
 Les chemins sont relatifs à la clé ; les liens et chemins sortant du support
 ne sont pas autorisés. Les SHA-256 détectent les modifications, mais ne
 prouvent pas qu'un jeu est sûr : ils ne remplacent pas un antivirus.
@@ -154,6 +150,7 @@ prouvent pas qu'un jeu est sûr : ils ne remplacent pas un antivirus.
 --------------
 Le dossier local est créé automatiquement ici :
   %APPDATA%\CompuCart\saves\<id>
+et, sur la cartouche, saves\<id> (un dossier par jeu).
 Configurez le jeu pour écrire et lire ses sauvegardes dans ce dossier ;
 Compu-Cart ne redirige pas automatiquement les sauvegardes d'un jeu.
 
@@ -168,7 +165,7 @@ le vrai jeu ne permettent pas de détecter correctement sa fin.
 6. DEPANNAGE ET DESINSTALLATION
 -------------------------------
 « Empreinte SHA-256 invalide » : la valeur dans checksums n'a pas 64
-caractères hexadécimaux (marqueur du modèle non remplacé, espace en trop…).
+caractères hexadécimaux (valeur non remplacée, espace en trop…).
 « Intégrité compromise » : un fichier ne correspond plus à son empreinte.
 Rien ne se passe au branchement : vérifiez que compucart.json est à la racine
 de la clé et que Compu-Cart tourne (icône près de l'horloge).

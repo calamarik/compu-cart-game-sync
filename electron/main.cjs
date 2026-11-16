@@ -1,6 +1,5 @@
 const { app, BrowserWindow, ipcMain, Tray, Menu, nativeImage, screen, powerMonitor } = require("electron");
 const path = require("path");
-const fs = require("fs");
 const core = require("./core.cjs");
 
 const LOGIN = { path: process.execPath, args: ["--background"], name: "Compu-Cart" };
@@ -75,10 +74,20 @@ function run() {
   const canEject = () => currentCart && !launching && !currentCart.ejecting && ["ready", "intro", "corrupt", "error"].includes(currentCart.state);
   const canPlay = () => currentCart && !launching && !currentCart.ejecting && currentCart.state === "ready";
 
+  /** What the window gets for a cartridge: titles only, never the checksums. `game` is the game being checked or played. */
+  const view = (cart, state = cart.state) => ({
+    state,
+    root: cart.root,
+    title: cart.title,
+    games: cart.games?.map(({ id, title }) => ({ id, title })),
+    game: cart.game && { id: cart.game.id, title: cart.game.title, executable: cart.game.executable },
+  });
+
   /** Windows balloon when a cartridge found at startup is ready while the console is hidden (background start). */
-  function notifyReady(manifest) {
+  function notifyReady(cart) {
     if (process.platform !== "win32" || !tray || (alive() && win.isVisible())) return;
-    tray.displayBalloon({ title: "Cartouche prête", content: `${manifest.title} est prête. Cliquez ici, puis sur « Jouer ».`, iconType: "info" });
+    const action = cart.games.length > 1 ? "puis choisissez un jeu" : "puis sur « Jouer »";
+    tray.displayBalloon({ title: "Cartouche prête", content: `${cart.title} est prête. Cliquez ici, ${action}.`, iconType: "info" });
   }
 
   /** Applies the saved option at startup. With the option off, a backup left by a crash is restored. */
@@ -114,10 +123,14 @@ function run() {
   function refreshTray() {
     if (!tray) return;
     const running = launching;
+    const games = currentCart?.games || [];
+    const play = games.length > 1
+      ? { label: "▶ Jouer", enabled: !!canPlay(), submenu: games.map((g) => ({ label: g.title, click: () => playCurrent(g.id) })) }
+      : { label: games[0] ? `▶ Jouer à ${games[0].title}` : "▶ Jouer", enabled: !!canPlay(), click: () => playCurrent() };
     tray.setToolTip(currentCart ? `Compu-Cart — ${currentCart.title || currentCart.root}` : "Compu-Cart — en attente de cartouche");
     tray.setContextMenu(Menu.buildFromTemplate([
       { label: "Afficher Compu-Cart", click: showConsole },
-      { label: currentCart?.title ? `▶ Jouer à ${currentCart.title}` : "▶ Jouer", enabled: !!canPlay(), click: () => playCurrent() },
+      play,
       { label: currentCart ? `Éjecter la cartouche (${currentCart.root})` : "Éjecter la cartouche", enabled: !!canEject(), click: () => ejectCurrent() },
       { type: "separator" },
       { label: "Démarrer avec Windows", type: "checkbox", checked: autostartEnabled(), click: (item) => { setAutostart(item.checked); refreshTray(); } },
@@ -128,17 +141,34 @@ function run() {
     ]));
   }
 
-  /** Intro image and sound of the cartridge as data URLs (null when absent). */
-  function introPayload(root, manifest) {
-    const asset = (rel, mime) => {
-      if (!rel) return null;
-      const f = path.join(root, rel);
-      return fs.existsSync(f) ? `data:${mime};base64,${fs.readFileSync(f).toString("base64")}` : null;
-    };
-    return { image: asset(manifest.intro?.image, "image/png"), audio: asset(manifest.intro?.audio, "audio/mpeg") };
+  /**
+   * Checks one game (SHA-256 of the listed files) and syncs its saves. Resolves "ok", "corrupt" (a listed file changed) or
+   * "gone" (the cartridge left meanwhile); the caller decides what the console shows next.
+   * steps: false when the intro is already on screen, so the console state must not move (it would hide the intro).
+   */
+  async function prepareGame(cart, game, { steps = true } = {}) {
+    const { root } = cart;
+    const integrity = await core.verifyIntegrity(root, game);
+    if (currentCart !== cart) return "gone";
+    send("cc:integrity", integrity);
+    if (!integrity.ok) {
+      log("error", `${game.title} : intégrité compromise — lancement bloqué`);
+      return "corrupt";
+    }
+    log("ok", `${game.title} : intégrité vérifiée`);
+    if (steps) { cart.state = "syncing"; setCart(view(cart, "syncing")); }
+    const sync = await core.syncSaves(root, game, app.getPath("appData"));
+    if (currentCart !== cart) return "gone";
+    send("cc:sync", sync);
+    log("ok", `Sauvegardes synchronisées (${sync.plan.filter((p) => p.action !== "skip").length} fichier(s))`);
+    return "ok";
   }
 
-  /** reason "startup": cartridge already there at launch (stops on "Prête"); "device": plugged while running (intro, then the game starts by itself). */
+  /**
+   * reason "startup": cartridge already there at launch (stops on "Prête"); "device": plugged while running (intro, then the game starts by itself).
+   * A single-game cartridge is checked and synced right away. With several games nothing is read beyond the manifests here:
+   * the game the player picks is checked and synced when it is launched (startGame), so a big compilation does not delay the menu.
+   */
   async function handleInsert(root, reason = "device") {
     if (currentCart) { log("warn", `Une cartouche est déjà active — ${root} ignoré`); return; }
     const cart = { root, state: "verifying" };
@@ -147,38 +177,31 @@ function run() {
     if (reason === "device" && !win.isVisible()) { autoShown = true; showConsole(); }
     try {
       log("info", reason === "device" ? `Cartouche détectée sur ${root}` : `Cartouche déjà présente sur ${root}`);
-      const manifest = await core.readManifest(root);
-      cart.title = manifest.title;
-      cart.manifest = manifest;
-      setCart({ state: "verifying", root, manifest });
-      const integrity = await core.verifyIntegrity(root, manifest);
+      const cartridge = await core.readCartridge(root);
       if (currentCart !== cart) return;
-      send("cc:integrity", integrity);
-      if (!integrity.ok) {
-        log("error", "Intégrité compromise — lancement bloqué");
-        cart.state = "corrupt";
-        return setCart({ state: "corrupt", root, manifest });
+      cart.title = cartridge.title;
+      cart.games = cartridge.games;
+      const single = cartridge.games.length === 1;
+      if (single) cart.game = cartridge.games[0];
+      setCart(view(cart, "verifying"));
+      if (single) {
+        const result = await prepareGame(cart, cart.game);
+        if (result === "corrupt") { cart.state = "corrupt"; return setCart(view(cart, "corrupt")); }
+        if (result !== "ok") return;
+        cart.prepared = true;
       }
-      log("ok", "Intégrité vérifiée");
-      cart.state = "syncing";
-      setCart({ state: "syncing", root, manifest });
-      const sync = await core.syncSaves(root, manifest, app.getPath("appData"));
-      if (currentCart !== cart) return;
-      send("cc:sync", sync);
-      log("ok", `Sauvegardes synchronisées (${sync.plan.filter((p) => p.action !== "skip").length} fichier(s))`);
-      if (core.nextStateAfterSync(reason, settings.autoLaunch) === "ready") {
-        // Plugged in with auto launch off: show the console (the Play button or Enter starts the game). Found at launch: stay quiet.
+      if (core.nextStateAfterSync(reason, settings.autoLaunch, cartridge.games.length) === "ready") {
+        // Several games, or plugged in with auto launch off: show the console (Play, Enter or a game of the list starts it). Found at launch: stay quiet.
         if (reason === "device") showConsole();
         cart.state = "ready";
-        setCart({ state: "ready", root, manifest });
-        log("ok", "Cartouche prête — cliquez sur « Jouer » (ou appuyez sur Entrée) pour lancer le jeu");
-        notifyReady(manifest);
+        setCart(view(cart, "ready"));
+        log("ok", single ? "Cartouche prête — cliquez sur « Jouer » (ou appuyez sur Entrée) pour lancer le jeu" : `Cartouche prête — ${cartridge.games.length} jeux : choisissez celui à lancer`);
+        notifyReady(cart);
         return;
       }
       // Windows (AutoPlay) often opens an Explorer window on the new drive a moment after it was detected and takes the focus:
       // take the front back when the intro starts. Not a full fix, the Windows AutoPlay setting is (see the installation guide).
       showConsole();
-      cart.verified = true;
       beginPlay(cart);
     } catch (e) {
       if (currentCart !== cart) return;
@@ -215,55 +238,60 @@ function run() {
     } catch (e) {
       log("error", `Éjection impossible : ${e.message}`);
     }
-    if (currentCart === cart) { cart.ejecting = false; cart.state = previous; setCart({ state: previous, root: cart.root }); }
+    if (currentCart === cart) { cart.ejecting = false; cart.state = previous; setCart(view(cart, previous)); }
   }
 
   /** Intro screen (animation + jingle) and, at the same time, the game start: the intro covers the loading time instead of delaying it. */
-  function beginPlay(cart) {
+  function beginPlay(cart, game = cart.game) {
+    cart.game = game;
     cart.state = "intro";
     cart.introAt = Date.now();
-    setCart({ state: "intro", root: cart.root, manifest: cart.manifest, intro: introPayload(cart.root, cart.manifest) });
+    setCart(view(cart, "intro"));
     startGame(cart);
   }
 
-  /** "Jouer" (window button, tray menu, Enter): same path as an automatic start. */
-  function playCurrent() {
+  /** "Jouer" (window button, tray menu, Enter) or a game picked in the list: same path as an automatic start. */
+  function playCurrent(gameId) {
     const cart = currentCart;
-    if (!canPlay() || !cart.manifest) { log("warn", launching ? "Un jeu est déjà en cours" : "Aucune cartouche prête à jouer"); return; }
+    if (!canPlay()) { log("warn", launching ? "Un jeu est déjà en cours" : "Aucune cartouche prête à jouer"); return; }
+    const game = gameId ? cart.games.find((g) => g.id === gameId) : cart.games.length === 1 ? cart.games[0] : null;
+    if (!game) { log("warn", gameId ? `Jeu inconnu sur cette cartouche : ${gameId}` : "Choisissez un jeu dans la liste"); return; }
     try {
       showConsole();
-      beginPlay(cart);
+      beginPlay(cart, game);
     } catch (e) {
       log("error", e.message);
     }
   }
 
   /**
-   * Starts the game while the intro plays. The integrity check ran at detection; it only runs again for a replay (files may have changed since).
+   * Starts cart.game while the intro plays. A single-game cartridge was checked and synced at detection, so only a replay checks it again
+   * (files may have changed since); with several games the picked game is checked and synced here, once, while the intro covers it.
    * The console state stays "intro" until the game shows a window (never before the minimum intro time), then becomes "running".
    */
   async function startGame(cart) {
     if (launching) return;
     launching = true;
     refreshTray();
-    const { root } = cart;
-    let manifest = cart.manifest;
+    const { root, game } = cart;
     let windowWatch = null;
     let focusWatch = null;
     try {
-      if (!cart.verified) {
-        manifest = await core.readManifest(root);
-        const integrity = await core.verifyIntegrity(root, manifest);
-        if (currentCart !== cart) return;
-        send("cc:integrity", integrity);
-        if (!integrity.ok) { cart.state = "corrupt"; setCart({ state: "corrupt", root, manifest }); throw new Error("Intégrité compromise — lancement bloqué"); }
+      if (!cart.prepared) {
+        const result = await prepareGame(cart, game, { steps: false });
+        if (result === "gone") return;
+        if (result === "corrupt") {
+          // One corrupt game must not lock the whole compilation: back to the list, the other games stay playable.
+          cart.state = cart.games.length > 1 ? "ready" : "corrupt";
+          return setCart(view(cart, cart.state));
+        }
       }
-      cart.verified = false;
-      log("info", `Lancement de ${manifest.title} (l'intro couvre le chargement)`);
+      cart.prepared = false;
+      log("info", `Lancement de ${game.title} (l'intro couvre le chargement)`);
       // The console stays fullscreen behind the game: resolution changes never reveal the desktop.
       win.setAlwaysOnTop(false);
       let exited = false;
-      const gameDone = core.launchGame(root, manifest, () => {
+      const gameDone = core.launchGame(root, game, () => {
         windowWatch = core.waitForGameWindow(root);
         windowWatch.done.then(async (why) => {
           if (exited || why === "cancelled" || currentCart !== cart) return;
@@ -272,7 +300,7 @@ function run() {
           if (exited || currentCart !== cart) return;
           log("info", why === "window" ? "Jeu affiché" : "Jeu en cours (fenêtre non détectée, fin de l'intro)");
           cart.state = "running";
-          setCart({ state: "running", root, manifest });
+          setCart(view(cart, "running"));
           // Some games open behind the console (slow start, window recreated when switching to fullscreen): bring them forward for a few seconds.
           focusWatch = core.focusGameWindow(root);
         });
@@ -281,14 +309,14 @@ function run() {
       showConsole();
       log("info", `Jeu terminé (code ${code}) — synchronisation retour`);
       if (currentCart !== cart) { log("warn", "Cartouche absente : sauvegardes locales conservées, retour reporté"); return; }
-      send("cc:sync", await core.syncSaves(root, manifest, app.getPath("appData")));
+      send("cc:sync", await core.syncSaves(root, game, app.getPath("appData")));
       cart.state = "ready";
-      setCart({ state: "ready", root, manifest });
+      setCart(view(cart, "ready"));
     } catch (e) {
       windowWatch?.cancel();
       focusWatch?.cancel();
       log("error", e.message);
-      if (currentCart === cart && cart.state !== "corrupt") { cart.state = "error"; setCart({ state: "error", root, manifest }); }
+      if (currentCart === cart && cart.state !== "corrupt") { cart.state = "error"; setCart(view(cart, "error")); }
     } finally {
       launching = false;
       refreshTray();
@@ -297,7 +325,7 @@ function run() {
 
   ipcMain.handle("cc:settings", () => ({ autoLaunch: settings.autoLaunch !== false }));
   ipcMain.handle("cc:setAutoLaunch", (_e, on) => setAutoLaunch(!!on));
-  ipcMain.handle("cc:play", () => playCurrent());
+  ipcMain.handle("cc:play", (_e, gameId) => playCurrent(typeof gameId === "string" ? gameId : undefined));
   ipcMain.handle("cc:state", () => store.snapshot());
   ipcMain.handle("cc:eject", () => ejectCurrent());
   ipcMain.handle("cc:hide", () => hideConsole());

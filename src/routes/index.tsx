@@ -17,14 +17,15 @@ export const Route = createFileRoute("/")({
 });
 
 type State = "empty" | "verifying" | "corrupt" | "syncing" | "intro" | "ready" | "running" | "error" | "ejecting" | "ejected";
-type Manifest = { id: string; title: string; executable: string };
-type Cart = { state: State; root?: string; manifest?: Manifest; intro?: { image: string | null; audio: string | null } };
+type Game = { id: string; title: string; executable?: string };
+/** A cartridge is a list of games (one game = a list of one). `game` is the one being checked or played. */
+type Cart = { state: State; root?: string; title?: string; games?: Game[]; game?: Game };
 type Log = { level: "info" | "ok" | "warn" | "error"; msg: string; at: number };
 type Integrity = { ok: boolean; results: { file: string; ok: boolean }[] };
 type Snapshot = { cart: Cart; integrity: Integrity | null; sync: { localDir: string; cartDir: string; plan: SyncItem[] } | null; logs: Log[] };
 type Bridge = {
   on: (ch: string, cb: (d: any) => void) => (() => void) | void;
-  play?: () => Promise<void>;
+  play?: (gameId?: string) => Promise<void>;
   settings?: () => Promise<{ autoLaunch: boolean }>;
   setAutoLaunch?: (on: boolean) => Promise<void>;
   state?: () => Promise<Snapshot>;
@@ -72,6 +73,7 @@ export function Index() {
   const [sync, setSync] = useState<{ localDir: string; cartDir: string; plan: SyncItem[] } | null>(null);
   const [bridge, setBridge] = useState<Bridge | null>(null);
   const [autoLaunch, setAutoLaunch] = useState(true);
+  const [selected, setSelected] = useState(0);
   const timers = useRef<number[]>([]);
   const announced = useRef(false);
   const log =(level: Log["level"], msg: string) => setLogs((l) => [{ level, msg, at: Date.now() }, ...l].slice(0, 60));
@@ -114,12 +116,12 @@ export function Index() {
   // Intro: starts with the game (the main process launches it at once); it covers the loading time.
   useEffect(() => {
     if (cart.state !== "intro") return;
-    if (cart.intro?.audio) new Audio(cart.intro.audio).play().catch(jingle); else jingle();
+    jingle();
     if (bridge) return;
     // Demo mode: simulated loading, then the game "appears".
     const t = window.setTimeout(() => {
       setCart((c) => ({ ...c, state: "running" }));
-      log("info", `Lancement simulé de ${cart.manifest?.title}`);
+      log("info", `Lancement simulé de ${cart.game?.title}`);
       timers.current.push(window.setTimeout(() => {
         log("info", "Jeu terminé (simulation) — synchronisation retour");
         setCart((c) => ({ ...c, state: "ready" }));
@@ -136,24 +138,34 @@ export function Index() {
     prevState.current = cart.state;
   }, [cart.state]);
 
-  const simulate = (corrupt = false) => {
+  const simulate = (corrupt = false, multi = false) => {
     timers.current.forEach(clearTimeout);
-    const manifest = { id: "star-runner", title: "STAR RUNNER", executable: "bin/StarRunner.exe" };
+    const games: Game[] = multi
+      ? [{ id: "star-runner", title: "STAR RUNNER" }, { id: "moon-miner", title: "MOON MINER" }, { id: "pixel-quest", title: "PIXEL QUEST" }]
+      : [{ id: "star-runner", title: "STAR RUNNER", executable: "games/star-runner/StarRunner.exe" }];
+    const first = games[0]!;
+    const base = { root: "E:\\", title: multi ? "DOUBLE PACK" : first.title, games };
+    const single = { ...base, game: first };
     const at = (ms: number, fn: () => void) => timers.current.push(window.setTimeout(fn, ms));
-    setIntegrity(null); setSync(null);
+    setIntegrity(null); setSync(null); setSelected(0);
     log("info", "Cartouche détectée sur E:\\");
-    setCart({ state: "verifying", root: "E:\\", manifest });
+    setCart({ state: "verifying", ...(multi ? base : single) });
+    if (multi) {
+      // Several games: nothing is launched, the player picks one (it is checked and synced when launched).
+      at(600, () => { setCart({ state: "ready", ...base }); log("ok", `Cartouche prête — ${games.length} jeux : choisissez celui à lancer`); });
+      return;
+    }
     at(1200, () => {
-      const results = ["bin/StarRunner.exe", "data/assets.pak", "data/levels.pak"].map((file, i) => ({ file, ok: !(corrupt && i === 1) }));
+      const results = ["games/star-runner/StarRunner.exe", "games/star-runner/data/assets.pak", "games/star-runner/data/levels.pak"].map((file, i) => ({ file, ok: !(corrupt && i === 1) }));
       setIntegrity({ ok: !corrupt, results });
-      if (corrupt) { log("error", "Intégrité compromise — lancement bloqué"); setCart({ state: "corrupt", root: "E:\\", manifest }); return; }
-      log("ok", "Intégrité vérifiée"); setCart({ state: "syncing", root: "E:\\", manifest });
+      if (corrupt) { log("error", "STAR RUNNER : intégrité compromise — lancement bloqué"); setCart({ state: "corrupt", ...single }); return; }
+      log("ok", "STAR RUNNER : intégrité vérifiée"); setCart({ state: "syncing", ...single });
       at(1200, () => {
         const now = Date.now();
         const plan = planSync({ "slot1.sav": now - 9e6, "settings.cfg": now }, { "slot1.sav": now, "slot2.sav": now - 5e5, "settings.cfg": now - 1000 });
-        setSync({ localDir: "%APPDATA%\\CompuCart\\saves\\star-runner", cartDir: "E:\\saves", plan });
+        setSync({ localDir: "%APPDATA%\\CompuCart\\saves\\star-runner", cartDir: "E:\\saves\\star-runner", plan });
         log("ok", `Sauvegardes synchronisées (${plan.filter((p) => p.action !== "skip").length} fichier(s))`);
-        setCart({ state: "intro", root: "E:\\", manifest });
+        setCart({ state: "intro", ...single });
       });
     });
   };
@@ -172,10 +184,16 @@ export function Index() {
   };
   const canEject = !!cart.root && EJECTABLE.includes(cart.state);
   const canPlay = cart.state === "ready" && !!cart.root;
-  const play = () => {
+  const gameCount = cart.games?.length ?? 0;
+  const multi = gameCount > 1;
+  useEffect(() => setSelected(0), [cart.root]);
+  /** Starts a game of the cartridge: the given one, or the only one of a single-game cartridge. */
+  const play = (gameId?: string) => {
     if (!canPlay) return;
-    if (bridge?.play) { bridge.play(); return; }
-    setCart((c) => ({ ...c, state: "intro" })); // demo mode: same intro + simulated launch
+    const game = gameId ? cart.games?.find((g) => g.id === gameId) : gameCount === 1 ? cart.games?.[0] : undefined;
+    if (!game) return;
+    if (bridge?.play) { bridge.play(game.id); return; }
+    setCart((c) => ({ ...c, state: "intro", game })); // demo mode: same intro + simulated launch
   };
   const toggleAutoLaunch = () => {
     const next = !autoLaunch;
@@ -184,13 +202,20 @@ export function Index() {
   };
 
   // Enter or Space starts the game of a ready cartridge (like pressing ON); ignored while a button or field has the focus.
+  // With several games, the arrows move the selection and Enter starts the selected one.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if ((e.key !== "Enter" && e.key !== " ") || e.repeat || !canPlay) return;
+      if (!canPlay) return;
+      if (multi && (e.key === "ArrowDown" || e.key === "ArrowUp")) {
+        e.preventDefault();
+        setSelected((i) => (i + (e.key === "ArrowDown" ? 1 : -1) + gameCount) % gameCount);
+        return;
+      }
+      if ((e.key !== "Enter" && e.key !== " ") || e.repeat) return;
       const tag = (e.target as HTMLElement | null)?.tagName;
       if (tag && ["INPUT", "TEXTAREA", "SELECT", "BUTTON", "A"].includes(tag)) return;
       e.preventDefault();
-      play();
+      play(multi ? cart.games?.[selected]?.id : undefined);
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
@@ -210,6 +235,7 @@ export function Index() {
           {!bridge && (<>
             <button onClick={() => simulate()} className="rounded-sm bg-primary px-4 py-2 text-sm font-bold text-primary-foreground hover:opacity-90">Insérer cartouche</button>
             <button onClick={() => simulate(true)} className="rounded-sm border border-destructive px-4 py-2 text-sm text-destructive hover:bg-destructive/10">Cartouche corrompue</button>
+            <button onClick={() => simulate(false, true)} className="rounded-sm border border-primary px-4 py-2 text-sm text-primary hover:bg-primary/10">Compilation (3 jeux)</button>
           </>)}
           <button onClick={eject} disabled={!canEject} title={canEject ? "Écrit les données puis déconnecte la cartouche" : "Disponible quand aucun jeu ni synchronisation n'est en cours"} className="rounded-sm border border-primary px-4 py-2 text-sm text-primary hover:bg-primary/10 disabled:cursor-not-allowed disabled:border-border disabled:text-muted-foreground disabled:hover:bg-transparent">⏏ Éjecter</button>
           {bridge?.setAutoLaunch && <button onClick={toggleAutoLaunch} aria-pressed={autoLaunch} title={autoLaunch ? "Une cartouche branchée lance son jeu toute seule. Cliquez pour passer en lancement manuel (bouton Jouer ou Entrée)." : "Une cartouche branchée s'arrête sur « Prête ». Cliquez pour que le jeu se lance tout seul au branchement."} className="rounded-sm border px-4 py-2 text-sm hover:bg-secondary">Lancement auto : {autoLaunch ? "ON" : "OFF"}</button>}
@@ -231,10 +257,19 @@ export function Index() {
           <div className={`flex items-center gap-5 rounded-sm border-2 border-dashed p-6 ${cart.state === "empty" ? "animate-slot" : "border-primary"}`}>
             <div className="grid h-20 w-16 place-items-center rounded-sm bg-secondary font-display text-xs text-primary">{cart.state === "empty" ? "—" : "CC"}</div>
             <div>
-              <p className="font-display text-sm">{cart.state === "ejected" ? "CARTOUCHE ÉJECTÉE" : cart.manifest?.title ?? "INSÉREZ UNE CARTOUCHE"}</p>
-              <p className="mt-2 text-xs text-muted-foreground">{cart.root ? [cart.root, cart.manifest?.executable].filter(Boolean).join(" · ") : "En attente d'un branchement…"}</p>
-              {canPlay && <button onClick={play} className="mt-4 rounded-sm bg-primary px-5 py-2 text-sm font-bold text-primary-foreground hover:opacity-90">▶ Jouer</button>}
-              {canPlay && <p className="mt-2 text-xs text-muted-foreground">ou appuyez sur Entrée</p>}
+              <p className="font-display text-sm">{cart.state === "ejected" ? "CARTOUCHE ÉJECTÉE" : cart.title ?? "INSÉREZ UNE CARTOUCHE"}</p>
+              <p className="mt-2 text-xs text-muted-foreground">{cart.root ? [cart.root, multi ? `${gameCount} jeux` : cart.game?.executable].filter(Boolean).join(" · ") : "En attente d'un branchement…"}</p>
+              {canPlay && multi && (
+                <ul className="mt-4 space-y-2" aria-label="Jeux de la cartouche">
+                  {cart.games?.map((g, i) => (
+                    <li key={g.id}>
+                      <button onClick={() => play(g.id)} onMouseEnter={() => setSelected(i)} aria-current={i === selected} className={`w-full rounded-sm border px-5 py-2 text-left text-sm ${i === selected ? "border-primary bg-primary/10 font-bold text-primary" : "hover:bg-secondary"}`}>▶ {g.title}</button>
+                    </li>
+                  ))}
+                </ul>
+              )}
+              {canPlay && !multi && <button onClick={() => play()} className="mt-4 rounded-sm bg-primary px-5 py-2 text-sm font-bold text-primary-foreground hover:opacity-90">▶ Jouer</button>}
+              {canPlay && <p className="mt-2 text-xs text-muted-foreground">{multi ? "↑ ↓ pour choisir, Entrée pour lancer" : "ou appuyez sur Entrée"}</p>}
             </div>
             <span className="ml-auto rounded-sm bg-secondary px-3 py-1 text-xs uppercase tracking-widest text-primary">{cart.state === "ready" ? "prête" : cart.state}</span>
           </div>
@@ -280,12 +315,10 @@ export function Index() {
       {cart.state === "intro" && (
         <div className="fixed inset-0 z-50 grid place-items-center bg-background">
           <div className="flex flex-col items-center">
-            {cart.intro?.image ? <img src={cart.intro.image} alt={cart.manifest?.title} className="max-h-[60vh] animate-splash" /> : (
-              <div className="animate-splash text-center">
-                <p className="font-display text-4xl text-primary glow md:text-6xl">COMPU-CART</p>
-                <p className="mt-6 font-display text-sm text-foreground">{cart.manifest?.title}</p>
-              </div>
-            )}
+            <div className="animate-splash text-center">
+              <p className="font-display text-4xl text-primary glow md:text-6xl">COMPU-CART</p>
+              <p className="mt-6 font-display text-sm text-foreground">{cart.game?.title}</p>
+            </div>
             <div className="mt-12 w-64 max-w-[70vw]" role="status" aria-live="polite">
               <div className="relative h-1.5 overflow-hidden rounded-sm bg-primary/15">
                 <div className="animate-load-sweep absolute inset-y-0 left-0 w-1/3 rounded-sm bg-primary shadow-[0_0_12px_var(--primary)]" />
@@ -302,7 +335,7 @@ export function Index() {
       {cart.state === "running" && (
         <div className="fixed inset-0 z-40 grid place-items-center bg-background" aria-live="polite">
           <div className="text-center">
-            <p className="font-display text-sm text-primary/60">{cart.manifest?.title ?? "JEU"} EN COURS</p>
+            <p className="font-display text-sm text-primary/60">{cart.game?.title ?? "JEU"} EN COURS</p>
             <p className="mt-4 text-xs text-muted-foreground">Compu-Cart reprendra à la fermeture du jeu.</p>
           </div>
         </div>

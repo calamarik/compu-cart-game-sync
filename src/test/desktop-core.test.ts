@@ -15,31 +15,151 @@ async function fixture() {
   return { root, cart: path.join(root, "cart") };
 }
 afterEach(async () => { await Promise.all(directories.splice(0).map((dir) => rm(dir, { recursive: true, force: true }))); });
+const sha = (text: string) => createHash("sha256").update(text).digest("hex");
+/** Writes one game the way the forge does: games/<id>/game.exe + manifests/<id>.json (+ saves/<id>/ when asked). */
+async function addGame(cart: string, id: string, extra: Record<string, unknown> = {}) {
+  await mkdir(path.join(cart, "games", id), { recursive: true });
+  await mkdir(path.join(cart, "manifests"), { recursive: true });
+  await writeFile(path.join(cart, "games", id, "game.exe"), `game ${id}`);
+  const executable = `games/${id}/game.exe`;
+  const manifest = { schemaVersion: 1, id, title: `Game ${id}`, executable, checksums: { [executable]: sha(`game ${id}`) }, ...extra };
+  await writeFile(path.join(cart, "manifests", `${id}.json`), JSON.stringify(manifest));
+  return manifest;
+}
+const writeIndex = (cart: string, index: unknown) => writeFile(path.join(cart, "compucart.json"), JSON.stringify(index));
+
 describe("Windows desktop core", () => {
   it("verifies the executable hash and rejects changed game bytes", async () => {
     const { cart } = await fixture();
-    await writeFile(path.join(cart, "game.exe"), "game");
-    const manifest = { id: "test-game", title: "Test", executable: "game.exe", checksums: { "game.exe": createHash("sha256").update("game").digest("hex") } };
-    await writeFile(path.join(cart, "compucart.json"), JSON.stringify(manifest));
-    expect((await core.verifyIntegrity(cart, await core.readManifest(cart))).ok).toBe(true);
-    await writeFile(path.join(cart, "game.exe"), "corrupt");
+    const manifest = await addGame(cart, "test-game");
+    await writeIndex(cart, { schemaVersion: 1, games: ["test-game"] });
+    const { games } = await core.readCartridge(cart);
+    expect((await core.verifyIntegrity(cart, games[0])).ok).toBe(true);
+    await writeFile(path.join(cart, "games", "test-game", "game.exe"), "corrupt");
     expect((await core.verifyIntegrity(cart, manifest)).ok).toBe(false);
   });
   it("creates user save folders, pulls the newer save, then pushes it back with a backup", async () => {
     const { root, cart } = await fixture();
-    await mkdir(path.join(cart, "saves"));
-    await writeFile(path.join(cart, "saves", "slot.sav"), "from cartridge");
-    const manifest = { id: "test-game", saveDir: "saves" };
+    await mkdir(path.join(cart, "saves", "test-game"), { recursive: true });
+    await writeFile(path.join(cart, "saves", "test-game", "slot.sav"), "from cartridge");
+    const manifest = { id: "test-game" };
     const first = await core.syncSaves(cart, manifest, path.join(root, "user"));
     expect(await readFile(path.join(first.localDir, "slot.sav"), "utf8")).toBe("from cartridge");
     await writeFile(path.join(first.localDir, "slot.sav"), "new local progress");
     const future = new Date(Date.now() + 10000);
     await utimes(path.join(first.localDir, "slot.sav"), future, future);
     await core.syncSaves(cart, manifest, path.join(root, "user"));
-    expect(await readFile(path.join(cart, "saves", "slot.sav"), "utf8")).toBe("new local progress");
-    expect(await readFile(path.join(cart, "saves", "slot.sav.bak"), "utf8")).toBe("from cartridge");
+    expect(await readFile(path.join(cart, "saves", "test-game", "slot.sav"), "utf8")).toBe("new local progress");
+    expect(await readFile(path.join(cart, "saves", "test-game", "slot.sav.bak"), "utf8")).toBe("from cartridge");
     const again = await core.syncSaves(cart, manifest, path.join(root, "user"));
     expect(again.plan.map((item: { file: string }) => item.file)).toEqual(["slot.sav"]);
+  });
+});
+
+describe("Cartridge format (compucart.json + manifests/ + games/ + saves/)", () => {
+  it("reads a single-game cartridge as a list of one, titled after its game", async () => {
+    const { cart } = await fixture();
+    await addGame(cart, "berserk-boy");
+    await writeIndex(cart, { schemaVersion: 1, games: ["berserk-boy"] });
+    const cartridge = await core.readCartridge(cart);
+    expect(cartridge.games.map((g: { id: string }) => g.id)).toEqual(["berserk-boy"]);
+    expect(cartridge.title).toBe("Game berserk-boy");
+  });
+  it("reads a compilation in the order of the list, with the title of the cartridge", async () => {
+    const { cart } = await fixture();
+    await addGame(cart, "b"); await addGame(cart, "a"); await addGame(cart, "c");
+    await writeIndex(cart, { schemaVersion: 1, title: "Triple Pack", games: ["c", "a", "b"] });
+    const cartridge = await core.readCartridge(cart);
+    expect(cartridge.title).toBe("Triple Pack");
+    expect(cartridge.games.map((g: { id: string }) => g.id)).toEqual(["c", "a", "b"]);
+  });
+  it("gives a default title to a compilation without one", async () => {
+    const { cart } = await fixture();
+    await addGame(cart, "a"); await addGame(cart, "b");
+    await writeIndex(cart, { schemaVersion: 1, games: ["a", "b"] });
+    expect((await core.readCartridge(cart)).title).toBe("Cartouche multijeu");
+  });
+  it("detects a cartridge by compucart.json at its root", async () => {
+    const { cart } = await fixture();
+    const watcher = new core.HotplugWatcher({ letters: "E" });
+    expect(watcher.exists(cart)).toBe(false);
+    await writeIndex(cart, { schemaVersion: 1, games: ["a"] });
+    expect(watcher.exists(cart)).toBe(true);
+  });
+  it("rejects an unknown schema version, so an old or newer cartridge is not misread", async () => {
+    const { cart } = await fixture();
+    await addGame(cart, "a");
+    await writeIndex(cart, { schemaVersion: 2, games: ["a"] });
+    await expect(core.readCartridge(cart)).rejects.toThrow(/schemaVersion/);
+    await writeIndex(cart, { games: ["a"] });
+    await expect(core.readCartridge(cart)).rejects.toThrow(/schemaVersion/);
+  });
+  it("rejects an old-format manifest at the root (no games list)", async () => {
+    const { cart } = await fixture();
+    await writeIndex(cart, { id: "old", title: "Old", executable: "Old/old.exe", saveDir: "saves", checksums: {} });
+    await expect(core.readCartridge(cart)).rejects.toThrow(/schemaVersion/);
+  });
+  it("rejects an empty or missing games list", async () => {
+    const { cart } = await fixture();
+    await writeIndex(cart, { schemaVersion: 1, games: [] });
+    await expect(core.readCartridge(cart)).rejects.toThrow(/games/);
+    await writeIndex(cart, { schemaVersion: 1 });
+    await expect(core.readCartridge(cart)).rejects.toThrow(/games/);
+  });
+  it("rejects a listed game without a manifest instead of showing an incomplete menu", async () => {
+    const { cart } = await fixture();
+    await addGame(cart, "a");
+    await writeIndex(cart, { schemaVersion: 1, games: ["a", "ghost"] });
+    await expect(core.readCartridge(cart)).rejects.toThrow(/ghost/);
+  });
+  it("rejects ids that are unsafe as a folder name, duplicates and case-only duplicates", async () => {
+    const { cart } = await fixture();
+    await addGame(cart, "a");
+    for (const games of [["../a"], ["a/b"], ["a b"], [""], [1], ["a", "a"], ["a", "A"]]) {
+      await writeIndex(cart, { schemaVersion: 1, games });
+      await expect(core.readCartridge(cart)).rejects.toThrow();
+    }
+  });
+  it("rejects a manifest whose id differs from its file name", async () => {
+    const { cart } = await fixture();
+    const manifest = await addGame(cart, "a");
+    await writeFile(path.join(cart, "manifests", "b.json"), JSON.stringify(manifest));
+    await writeIndex(cart, { schemaVersion: 1, games: ["b"] });
+    await expect(core.readCartridge(cart)).rejects.toThrow(/ne correspond pas/);
+  });
+  it("rejects invalid manifests: missing checksum for the executable, bad hash, bad args, escaping paths", async () => {
+    const { cart } = await fixture();
+    await writeIndex(cart, { schemaVersion: 1, games: ["a"] });
+    for (const extra of [
+      { checksums: {} },
+      { checksums: { "games/a/game.exe": "nothex" } },
+      { args: "-windowed" },
+      { args: [1] },
+      { executable: "../outside.exe", checksums: { "../outside.exe": sha("x") } },
+      { schemaVersion: 2 },
+    ]) {
+      await addGame(cart, "a", extra);
+      await expect(core.readCartridge(cart)).rejects.toThrow();
+    }
+  });
+  it("accepts optional launch arguments", async () => {
+    const { cart } = await fixture();
+    await addGame(cart, "a", { args: ["-windowed"] });
+    await writeIndex(cart, { schemaVersion: 1, games: ["a"] });
+    expect((await core.readCartridge(cart)).games[0].args).toEqual(["-windowed"]);
+  });
+  it("keeps the saves of each game in its own folder saves/<id>/", async () => {
+    const { root, cart } = await fixture();
+    for (const id of ["a", "b"]) {
+      await mkdir(path.join(cart, "saves", id), { recursive: true });
+      await writeFile(path.join(cart, "saves", id, "slot.sav"), `save of ${id}`);
+    }
+    const user = path.join(root, "user");
+    const a = await core.syncSaves(cart, { id: "a" }, user);
+    const b = await core.syncSaves(cart, { id: "b" }, user);
+    expect(a.localDir).not.toBe(b.localDir);
+    expect(await readFile(path.join(a.localDir, "slot.sav"), "utf8")).toBe("save of a");
+    expect(await readFile(path.join(b.localDir, "slot.sav"), "utf8")).toBe("save of b");
   });
 });
 
@@ -131,6 +251,11 @@ describe("Ready or auto-play", () => {
     expect(core.autoPlays("device", false)).toBe(false);
     expect(core.nextStateAfterSync("device", false)).toBe("ready");
     expect(core.nextStateAfterSync("startup", false)).toBe("ready");
+  });
+  it("a cartridge with several games never launches by itself: the player picks the game", () => {
+    expect(core.nextStateAfterSync("device", true, 2)).toBe("ready");
+    expect(core.nextStateAfterSync("device", true, 5)).toBe("ready");
+    expect(core.nextStateAfterSync("device", true, 1)).toBe("intro");
   });
   it("with auto launch on, or when the option is unknown, nothing changes", () => {
     expect(core.autoPlays("device", true)).toBe(true);

@@ -6,7 +6,7 @@ contextBridge.exposeInMainWorld("compucart", {
     ipcRenderer.on(`cc:${ch}`, listener);
     return () => ipcRenderer.removeListener(`cc:${ch}`, listener);
   },
-  play: () => ipcRenderer.invoke("cc:play"),
+  play: (gameId) => ipcRenderer.invoke("cc:play", gameId),
   state: () => ipcRenderer.invoke("cc:state"),
   settings: () => ipcRenderer.invoke("cc:settings"),
   setAutoLaunch: (on) => ipcRenderer.invoke("cc:setAutoLaunch", !!on),
