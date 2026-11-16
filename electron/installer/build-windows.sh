@@ -32,10 +32,7 @@ npx @electron/packager "$STAGE/app" Compu-Cart --platform=win32 --arch=x64 \
   --win32metadata.FileDescription="Compu-Cart"
 APPDIR="$STAGE/pkg/Compu-Cart-win32-x64"
 
-# Cartridge tools and guide next to the program.
-mkdir -p "$APPDIR/outils" "$APPDIR/exemple-cartouche"
-cp "$PROJECT/electron/outils/Preparer-Cartouche.ps1" "$APPDIR/outils/"
-cp "$PROJECT/electron/compucart.modele.json" "$APPDIR/exemple-cartouche/"
+# Guide next to the program (the forge that prepares cartridges is a separate tool, not shipped here).
 cp "$PROJECT/electron/INSTALLATION.txt" "$APPDIR/INSTALLATION.txt"
 
 # Uninstall list: exactly the top-level entries we ship.
